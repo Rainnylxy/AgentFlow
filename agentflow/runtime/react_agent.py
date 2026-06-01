@@ -29,6 +29,8 @@ class ReActAgent(BaseAgent):
                 msg_dict = {"role": m.role, "content": m.content}
                 if m.tool_call_id:
                     msg_dict["tool_call_id"] = m.tool_call_id
+                if m.tool_calls:
+                    msg_dict["tool_calls"] = m.tool_calls
                 messages.append(msg_dict)
 
             # 构建可用工具列表
@@ -51,6 +53,13 @@ class ReActAgent(BaseAgent):
 
             # 如果有 tool_call，执行工具
             if response.tool_calls:
+                # 先将 assistant 的 tool_calls 消息加入历史（API 要求：tool 消息前必须有 assistant 的 tool_calls）
+                self.memory.short_term.add(Message(
+                    role="assistant",
+                    content="",
+                    tool_calls=response.tool_calls,
+                ))
+
                 for tc in response.tool_calls:
                     func_name = tc["function"]["name"]
                     func_args = json.loads(tc["function"]["arguments"])

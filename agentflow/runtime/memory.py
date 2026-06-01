@@ -10,6 +10,11 @@ class Message:
     role: str
     content: str
     tool_call_id: str = ""
+    tool_calls: list = None
+
+    def __post_init__(self):
+        if self.tool_calls is None:
+            self.tool_calls = []
 
 
 class ShortTermMemory:
