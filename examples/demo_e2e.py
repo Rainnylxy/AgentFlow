@@ -36,7 +36,6 @@ from agentflow.runtime.memory import MemoryManager
 from agentflow.runtime.react_agent import ReActAgent
 from agentflow.trace.client import TraceClient
 from agentflow.eval.exact_match import ExactMatchEvaluator
-from agentflow.eval.suite import EvalSuite, EvalCase
 
 
 # ============================================================
@@ -288,33 +287,80 @@ async def run_agent_task(task: str) -> dict:
 result = asyncio.run(run_agent_task("I want a refund, what should I do?"))
 
 # ============================================================
-# Step 5: Eval scoring
+# Step 5: 多维评测
 # ============================================================
 print()
 print("-" * 60)
-print("Step 5: Eval Scoring")
+print("Step 5: Multi-Dimensional Eval")
 print("-" * 60)
 
-evaluator = ExactMatchEvaluator(case_sensitive=False, normalize_whitespace=True)
+# --- 维度 1: 工具调用准确性 (ExactMatch) ---
+# 不是测试文本回答，而是测"Agent 有没有选对工具"
+print()
+print("  [Dimension 1] Tool-Use Accuracy (ExactMatch)")
+tool_evaluator = ExactMatchEvaluator(case_sensitive=False)
 
-eval_cases = [
-    EvalCase(id="refund-keyword", input="I want a refund", expected="refund", evaluator=evaluator),
-]
+# 检查 Agent 是否调了 lookup_kb 工具
+expected_tool = "lookup_kb"
+actual_tools = [tc["tool"] for tc in result["tool_calls"]]
+tool_match = expected_tool in actual_tools
 
-suite = EvalSuite(name="Customer Support Eval", cases=eval_cases)
+tool_score = 1.0 if tool_match else 0.0
+status = "PASS" if tool_match else "FAIL"
+print(f"  [{status}] Expected tool: {expected_tool}")
+print(f"         Actual tools:  {actual_tools}")
+print(f"         Score: {tool_score:.2f}")
 
+# --- 维度 2: 推理轨迹质量 (Trajectory Scoring) ---
+print()
+print("  [Dimension 2] Trajectory Quality (Trajectory Scoring)")
 
-def agent_fn(user_input: str) -> str:
-    return result["output"]
+from agentflow.eval.trajectory import TrajectoryEvaluator
+traj_eval = TrajectoryEvaluator()
 
+# 构建轨迹数据
+trajectory_data = {
+    "steps": [
+        {"type": "tool_call", "tool": s.get("calls", [None])[0]}
+        if s["type"] == "tool_call" else s
+        for s in result["steps"]
+    ]
+}
 
-report = suite.run(agent_fn)
+traj_result = traj_eval.evaluate_quality(trajectory_data)
+traj_status = "PASS" if traj_result.passed else "FAIL"
+print(f"  [{traj_status}] Score: {traj_result.score:.2f}")
+print(f"         Reason: {traj_result.reason}")
+print(f"         Steps breakdown:")
+for i, s in enumerate(result["steps"]):
+    icon = {"tool_call": "|-- [TOOL]", "final": "|-- [ANSWER]"}.get(s["type"], "|-- [?]")
+    detail = s.get("calls", []) if s["type"] == "tool_call" else s.get("output", "")[:60]
+    print(f"           {icon} {detail}")
 
-print(f"  Suite:     {report.name}")
-print(f"  Pass rate: {report.pass_rate:.0%} ({report.passed}/{report.total})")
-for d in report.details:
-    status = "PASS" if d["passed"] else "FAIL"
-    print(f"  [{status}] {d['case_id']}: score={d['score']:.2f} | {d['reason']}")
+# --- 维度 3: 语义相似度 (Semantic) ---
+print()
+print("  [Dimension 3] Answer Quality (Semantic Similarity)")
+
+from agentflow.eval.semantic import SemanticEvaluator, HAS_ST
+if HAS_ST:
+    semantic_eval = SemanticEvaluator(threshold=0.5)
+    expected_answer = "The refund policy allows returns within 30 days"
+    sem_result = semantic_eval.evaluate(expected_answer, result["output"])
+    sem_status = "PASS" if sem_result.passed else "FAIL"
+    print(f"  [{sem_status}] Score: {sem_result.score:.2f}")
+    print(f"         Expected: {expected_answer}")
+    print(f"         Got:      {result['output'][:80]}...")
+    print(f"         Reason:   {sem_result.reason}")
+else:
+    print("  [SKIP] sentence-transformers not available on this Python version")
+
+# --- 汇总 ---
+print()
+print("  Eval Summary:")
+print(f"    Tool-Use:   {'PASS' if tool_match else 'FAIL'} (ExactMatch)")
+print(f"    Trajectory: {traj_status} (Score: {traj_result.score:.2f})")
+if HAS_ST:
+    print(f"    Semantic:   {sem_status} (Score: {sem_result.score:.2f})")
 
 # ============================================================
 # Step 6: Summary
