@@ -44,7 +44,7 @@ from agentflow.eval.suite import EvalSuite, EvalCase
 # ============================================================
 API_KEY = os.getenv("AGENTFLOW_API_KEY", "")
 BASE_URL = os.getenv("AGENTFLOW_BASE_URL", "https://api.deepseek.com/v1")
-MODEL = os.getenv("AGENTFLOW_MODEL", "deepseek-chat")
+MODEL = os.getenv("AGENTFLOW_MODEL", "deepseek-v4-flash")
 
 print("=" * 60)
 print("  AgentFlow End-to-End Demo")
@@ -193,7 +193,9 @@ async def run_agent_task(task: str) -> dict:
     trace = trace_client.start_trace(workflow_id=workflow.name)
 
     if API_KEY:
-        llm_client = OpenAIClient(api_key=API_KEY, model=MODEL, base_url=BASE_URL)
+        proxy = os.getenv("AGENTFLOW_PROXY", "http://127.0.0.1:3067")
+        llm_client = OpenAIClient(api_key=API_KEY, model=MODEL, base_url=BASE_URL, proxy=proxy)
+        print(f"  Using proxy: {proxy}")
     else:
         # Mock mode: simulates a realistic ReAct loop
         # First call -> tool_call, second call -> final answer

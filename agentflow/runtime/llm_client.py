@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
+import httpx
 from openai import AsyncOpenAI
 
 
@@ -31,6 +32,7 @@ class OpenAIClient(LLMClient):
 
     支持所有兼容 OpenAI API 格式的提供商（OpenAI、DeepSeek、Qwen 等）。
     只需在初始化时设置不同的 base_url 和 api_key。
+    支持通过 proxy 参数或 AGENTFLOW_PROXY 环境变量设置 HTTP 代理。
     """
 
     def __init__(
@@ -38,12 +40,25 @@ class OpenAIClient(LLMClient):
         api_key: str,
         model: str,
         base_url: str = "https://api.openai.com/v1",
+        proxy: Optional[str] = None,
     ):
         if not api_key:
             raise ValueError("api_key is required")
         self.model = model
         self.base_url = base_url
-        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+
+        # 构建 httpx 客户端（支持代理）
+        import os
+        proxy = proxy or os.getenv("AGENTFLOW_PROXY", "")
+        http_client = None
+        if proxy:
+            http_client = httpx.AsyncClient(proxy=proxy)
+
+        self.client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            http_client=http_client,
+        )
 
     async def chat(
         self, messages: list[dict], tools: Optional[list[dict]] = None
