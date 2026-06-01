@@ -230,6 +230,7 @@ async def run_agent_task(task: str) -> dict:
                         content=None,
                         tool_calls=[{
                             "id": "mock_1",
+                            "type": "function",
                             "function": {"name": tool_name, "arguments": args},
                         }]
                     )

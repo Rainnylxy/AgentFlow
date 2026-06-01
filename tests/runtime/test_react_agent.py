@@ -36,6 +36,7 @@ class TestReActAgent:
                 content=None, role="assistant",
                 tool_calls=[{
                     "id": "call_1",
+                    "type": "function",
                     "function": {"name": "calculator", "arguments": '{"expression": "2+2"}'},
                 }],
             ),
@@ -70,6 +71,7 @@ class TestReActAgent:
             content=None, role="assistant",
             tool_calls=[{
                 "id": "c1",
+                "type": "function",
                 "function": {"name": "echo", "arguments": '{"text": "ping"}'},
             }],
         )
