@@ -23,12 +23,13 @@ class ReActAgent(BaseAgent):
         tool_calls_made = []
 
         for i in range(self.max_iterations):
-            # 构建消息列表
+            # 构建消息列表（包括 tool_call_id）
             messages = [{"role": "system", "content": self.system_prompt}]
-            messages += [
-                {"role": m.role, "content": m.content}
-                for m in self.memory.short_term.get_context_window()
-            ]
+            for m in self.memory.short_term.get_context_window():
+                msg_dict = {"role": m.role, "content": m.content}
+                if m.tool_call_id:
+                    msg_dict["tool_call_id"] = m.tool_call_id
+                messages.append(msg_dict)
 
             # 构建可用工具列表
             tool_list = self.tool_registry.list_tools()
@@ -61,10 +62,11 @@ class ReActAgent(BaseAgent):
                         "output": result.output,
                     })
 
-                    # 将工具结果注入对话历史
+                    # 将工具结果注入对话历史（必须带 tool_call_id）
                     self.memory.short_term.add(Message(
                         role="tool",
-                        content=f"[{func_name}]: {result.output}",
+                        content=result.output or "",
+                        tool_call_id=tc.get("id", ""),
                     ))
 
                 steps.append({
