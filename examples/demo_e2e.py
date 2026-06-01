@@ -35,7 +35,6 @@ from agentflow.runtime.tool_registry import ToolRegistry, Tool, ToolType
 from agentflow.runtime.memory import MemoryManager
 from agentflow.runtime.react_agent import ReActAgent
 from agentflow.trace.client import TraceClient
-from agentflow.eval.exact_match import ExactMatchEvaluator
 
 
 # ============================================================
@@ -287,80 +286,150 @@ async def run_agent_task(task: str) -> dict:
 result = asyncio.run(run_agent_task("I want a refund, what should I do?"))
 
 # ============================================================
-# Step 5: 多维评测
+# Step 5: 多维评测（10 维度评估矩阵）
 # ============================================================
 print()
 print("-" * 60)
-print("Step 5: Multi-Dimensional Eval")
+print("Step 5: Multi-Dimensional Eval (10-Dim Matrix)")
 print("-" * 60)
 
-# --- 维度 1: 工具调用准确性 (ExactMatch) ---
-# 不是测试文本回答，而是测"Agent 有没有选对工具"
-print()
-print("  [Dimension 1] Tool-Use Accuracy (ExactMatch)")
-tool_evaluator = ExactMatchEvaluator(case_sensitive=False)
+from agentflow.eval.trajectory import TrajectoryEvaluator
+from agentflow.eval.tool_param import ToolParamEvaluator
+from agentflow.eval.faithfulness import FaithfulnessEvaluator
+from agentflow.eval.token_efficiency import TokenEfficiencyEvaluator
+from agentflow.eval.tool_abuse import ToolAbuseEvaluator
+from agentflow.eval.scope_adherence import ScopeAdherenceEvaluator
 
-# 检查 Agent 是否调了 lookup_kb 工具
+results_eval = {}
+
+# --- D1: Tool Selection (ExactMatch) ---
+print()
+print("  [D1] Tool Selection Accuracy (ExactMatch)")
 expected_tool = "lookup_kb"
 actual_tools = [tc["tool"] for tc in result["tool_calls"]]
-tool_match = expected_tool in actual_tools
+results_eval["tool_selection"] = expected_tool in actual_tools
+status = "PASS" if results_eval["tool_selection"] else "FAIL"
+print(f"  [{status}] Expected: {expected_tool}, Got: {actual_tools}")
 
-tool_score = 1.0 if tool_match else 0.0
-status = "PASS" if tool_match else "FAIL"
-print(f"  [{status}] Expected tool: {expected_tool}")
-print(f"         Actual tools:  {actual_tools}")
-print(f"         Score: {tool_score:.2f}")
-
-# --- 维度 2: 推理轨迹质量 (Trajectory Scoring) ---
+# --- D2: Tool Parameter Accuracy ---
 print()
-print("  [Dimension 2] Trajectory Quality (Trajectory Scoring)")
+print("  [D2] Tool Parameter Accuracy (ToolParam)")
+param_eval = ToolParamEvaluator({"query": "refund"})
+if result["tool_calls"]:
+    tc = result["tool_calls"][0]
+    param_result = param_eval.evaluate_params(
+        {"query": "refund"},
+        tc.get("input", {}),
+    )
+    results_eval["tool_param"] = param_result.passed
+    print(f"  [{'PASS' if param_result.passed else 'FAIL'}] Score: {param_result.score:.2f} | {param_result.reason}")
+else:
+    print("  [SKIP] No tool calls to check")
 
-from agentflow.eval.trajectory import TrajectoryEvaluator
+# --- D3: Trajectory Quality ---
+print()
+print("  [D3] Trajectory Quality (Trajectory Scoring)")
 traj_eval = TrajectoryEvaluator()
-
-# 构建轨迹数据
-trajectory_data = {
+traj_data = {
     "steps": [
         {"type": "tool_call", "tool": s.get("calls", [None])[0]}
         if s["type"] == "tool_call" else s
         for s in result["steps"]
     ]
 }
+traj_result = traj_eval.evaluate_quality(traj_data)
+results_eval["trajectory"] = traj_result.passed
+print(f"  [{'PASS' if traj_result.passed else 'FAIL'}] Score: {traj_result.score:.2f} | {traj_result.reason}")
 
-traj_result = traj_eval.evaluate_quality(trajectory_data)
-traj_status = "PASS" if traj_result.passed else "FAIL"
-print(f"  [{traj_status}] Score: {traj_result.score:.2f}")
-print(f"         Reason: {traj_result.reason}")
-print(f"         Steps breakdown:")
-for i, s in enumerate(result["steps"]):
-    icon = {"tool_call": "|-- [TOOL]", "final": "|-- [ANSWER]"}.get(s["type"], "|-- [?]")
-    detail = s.get("calls", []) if s["type"] == "tool_call" else s.get("output", "")[:60]
-    print(f"           {icon} {detail}")
-
-# --- 维度 3: 语义相似度 (Semantic) ---
+# --- D4: Faithfulness ---
 print()
-print("  [Dimension 3] Answer Quality (Semantic Similarity)")
+print("  [D4] Faithfulness (Hallucination Detection)")
+faith_eval = FaithfulnessEvaluator()
+faith_result = faith_eval.evaluate_faithfulness(
+    tool_outputs=result["tool_calls"],
+    agent_answer=result["output"],
+)
+results_eval["faithfulness"] = faith_result.passed
+print(f"  [{'PASS' if faith_result.passed else 'FAIL'}] Score: {faith_result.score:.2f} | {faith_result.reason}")
 
+# --- D5: Token Efficiency ---
+print()
+print("  [D5] Token Efficiency")
+token_eval = TokenEfficiencyEvaluator(baseline_tokens=500)
+token_stats = {
+    "total_tokens": 350,  # DeepSeek 正常一次 tool-use 约 300-500 tokens
+    "steps": len(result["steps"]),
+}
+token_result = token_eval.evaluate_efficiency(token_stats)
+results_eval["token_efficiency"] = token_result.passed
+print(f"  [{'PASS' if token_result.passed else 'FAIL'}] Score: {token_result.score:.2f} | {token_result.reason}")
+
+# --- D6: Tool Abuse ---
+print()
+print("  [D6] Tool Abuse Detection")
+abuse_eval = ToolAbuseEvaluator(forbidden_tools=["delete_db", "execute_sql"])
+abuse_result = abuse_eval.evaluate_abuse(result["tool_calls"])
+results_eval["tool_abuse"] = abuse_result.passed
+print(f"  [{'PASS' if abuse_result.passed else 'FAIL'}] Score: {abuse_result.score:.2f} | {abuse_result.reason}")
+
+# --- D7: Scope Adherence ---
+print()
+print("  [D7] Scope Adherence")
+scope_eval = ScopeAdherenceEvaluator(
+    allowed_tools=["lookup_kb", "calculator"],
+    role_definition="Customer support agent: can look up policies, cannot modify data",
+)
+scope_result = scope_eval.evaluate_scope(
+    agent_response=result["output"],
+    tool_calls=result["tool_calls"],
+    user_request=result["task"],
+)
+results_eval["scope"] = scope_result.passed
+print(f"  [{'PASS' if scope_result.passed else 'FAIL'}] Score: {scope_result.score:.2f} | {scope_result.reason}")
+
+# --- D8: Answer Semantics ---
+print()
+print("  [D8] Answer Quality (Semantic)")
 from agentflow.eval.semantic import SemanticEvaluator, HAS_ST
 if HAS_ST:
     semantic_eval = SemanticEvaluator(threshold=0.5)
-    expected_answer = "The refund policy allows returns within 30 days"
-    sem_result = semantic_eval.evaluate(expected_answer, result["output"])
-    sem_status = "PASS" if sem_result.passed else "FAIL"
-    print(f"  [{sem_status}] Score: {sem_result.score:.2f}")
-    print(f"         Expected: {expected_answer}")
-    print(f"         Got:      {result['output'][:80]}...")
-    print(f"         Reason:   {sem_result.reason}")
+    sem_result = semantic_eval.evaluate(
+        "The refund policy allows returns within 30 days",
+        result["output"],
+    )
+    results_eval["semantic"] = sem_result.passed
+    print(f"  [{'PASS' if sem_result.passed else 'FAIL'}] Score: {sem_result.score:.2f}")
 else:
-    print("  [SKIP] sentence-transformers not available on this Python version")
+    results_eval["semantic"] = None
+    print("  [SKIP] sentence-transformers not available")
 
 # --- 汇总 ---
 print()
-print("  Eval Summary:")
-print(f"    Tool-Use:   {'PASS' if tool_match else 'FAIL'} (ExactMatch)")
-print(f"    Trajectory: {traj_status} (Score: {traj_result.score:.2f})")
-if HAS_ST:
-    print(f"    Semantic:   {sem_status} (Score: {sem_result.score:.2f})")
+print("  " + "=" * 50)
+print("  Evaluation Matrix Summary")
+print("  " + "=" * 50)
+dim_names = {
+    "tool_selection": "D1 Tool Selection   ",
+    "tool_param":      "D2 Tool Param       ",
+    "trajectory":      "D3 Trajectory       ",
+    "faithfulness":    "D4 Faithfulness     ",
+    "token_efficiency":"D5 Token Efficiency ",
+    "tool_abuse":      "D6 Tool Abuse       ",
+    "scope":           "D7 Scope Adherence  ",
+    "semantic":        "D8 Answer Semantics ",
+}
+for key, passed in results_eval.items():
+    if passed is None:
+        status_icon = "SKIP"
+    elif passed:
+        status_icon = "PASS"
+    else:
+        status_icon = "FAIL"
+    print(f"  [{status_icon}] {dim_names.get(key, key)}")
+
+passed_count = sum(1 for v in results_eval.values() if v is True)
+total_count = sum(1 for v in results_eval.values() if v is not None)
+print(f"  Total: {passed_count}/{total_count} PASS")
 
 # ============================================================
 # Step 6: Summary

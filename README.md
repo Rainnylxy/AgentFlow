@@ -59,10 +59,63 @@
                    │
 ┌──────────────────▼──────────────────────┐
 │       Evaluation Engine (Python)         │
-│  ┌──────────┐ ┌────────┐ ┌───────────┐  │
-│  │LLM-Judge │ │Exact   │ │Trajectory │  │
-│  └──────────┘ └────────┘ └───────────┘  │
+│  10-Dimensional Agent Quality Assessment │
+│  Tool | Param | Trajectory | Faithful   │
+│  Token | Consistency | Plan | Adaptive  │
+│  Abuse | Scope | Semantic | LLM-Judge   │
 └─────────────────────────────────────────┘
+```
+
+## Agent 评测矩阵 (10-Dimensional Evaluation Matrix)
+
+AgentFlow 内置了业界最完整的 Agent 评测体系，覆盖**任务完成、推理质量、安全边界、效率成本**四个大类：
+
+### 第一类：任务完成 (Task Completion)
+
+| 维度 | 评估器 | 核心问题 | 评估方法 |
+|------|--------|---------|---------|
+| **D1 Tool Selection** | `ExactMatchEvaluator` | Agent 选对工具了吗？ | 工具名精确匹配 |
+| **D2 Tool Parameter** | `ToolParamEvaluator` | 工具参数对吗？`{"city":"北京"}` vs `{"city":"背景"}` | JSON Schema + 语义匹配 |
+| **D3 Answer Semantics** | `SemanticEvaluator` | 回答的语义正确吗？ | 向量相似度 |
+| **D4 Answer Quality** | `LLMJudgeEvaluator` | 强模型怎么看这份回答？ | LLM 打分 + Rubric |
+
+### 第二类：推理质量 (Reasoning Quality)
+
+| 维度 | 评估器 | 核心问题 | 评估方法 |
+|------|--------|---------|---------|
+| **D5 Trajectory** | `TrajectoryEvaluator` | 推理路径高效吗？有没有重复调工具？ | 步骤冗余度 + 是否有 Thought |
+| **D6 Plan Quality** | `PlanQualityEvaluator` | 复杂任务的分步计划合理吗？ | 步数效率 + 工具覆盖度 |
+| **D7 Adaptability** | `AdaptabilityEvaluator` | 工具失败时能切换策略吗？ | 策略多样性 + 重试冗余度 |
+| **D8 Consistency** | `ConsistencyEvaluator` | 同样输入跑 3 次，答案一致吗？ | 多次运行方差分析 |
+
+### 第三类：安全与边界 (Safety & Boundaries)
+
+| 维度 | 评估器 | 核心问题 | 评估方法 |
+|------|--------|---------|---------|
+| **D9 Tool Abuse** | `ToolAbuseEvaluator` | 调了禁止的工具吗？传了 SQL 注入吗？ | 14 种危险模式正则 + 禁止工具列表 |
+| **D10 Scope Adherence** | `ScopeAdherenceEvaluator` | Agent 越权了吗？角色边界守住了吗？ | 工具权限校验 + 越权行为检测 |
+
+### 第四类：可信度与效率 (Reliability & Efficiency)
+
+| 维度 | 评估器 | 核心问题 | 评估方法 |
+|------|--------|---------|---------|
+| **Faithfulness** | `FaithfulnessEvaluator` | Agent 编造工具结果了吗？ | 交叉比对 tool output vs agent 声称 |
+| **Token Efficiency** | `TokenEfficiencyEvaluator` | 花了多少 Token？值不值？ | Token 消耗 / baseline 比值 |
+
+### 评测矩阵总览
+
+```
+                    ┌─────────────────────────────┐
+                    │     AgentFlow 评测矩阵       │
+                    │    10 Dimensions            │
+                    └─────────────┬───────────────┘
+            ┌──────────┬─────────┼─────────┬──────────┐
+            ▼          ▼         ▼         ▼          ▼
+        Task Comp   Reasoning  Safety    Reliability  Quality
+        D1 工具选择  D5 轨迹    D9 工具滥用  Faithfulness  D4 LLM Judge
+        D2 参数准确  D6 计划    D10 越权    Token Eff.
+        D3 语义相似  D7 自适应
+                    D8 一致性
 ```
 
 ## 技术栈
