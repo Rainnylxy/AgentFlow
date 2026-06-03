@@ -6,5 +6,10 @@
 
 from agentflow.runtime.thinking.base import ThinkingStrategy, ThinkContext, ThinkResult
 from agentflow.runtime.thinking.react import ReActStrategy
+from agentflow.runtime.thinking.plan_execute import PlanExecuteStrategy
+from agentflow.runtime.thinking.cot import CoTStrategy
 
-__all__ = ["ThinkingStrategy", "ThinkContext", "ThinkResult", "ReActStrategy"]
+__all__ = [
+    "ThinkingStrategy", "ThinkContext", "ThinkResult",
+    "ReActStrategy", "PlanExecuteStrategy", "CoTStrategy",
+]
