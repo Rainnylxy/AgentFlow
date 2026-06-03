@@ -45,6 +45,38 @@ class TestToolDecorator:
 
         assert add.name == "my_add"
 
+    def test_decorator_with_optional_param(self):
+        """Optional 参数不应出现在 required 中。"""
+
+        @tool
+        def search(query: str, limit: int = 10):
+            """Search."""
+            return f"{query}: {limit}"
+
+        params = search.parameters
+        assert "query" in params["required"]
+        assert "limit" not in params["required"]
+
+    def test_decorator_with_list_param(self):
+        """list 类型应生成 array schema。"""
+
+        @tool
+        def batch(items: list) -> list:
+            """Process batch."""
+            return items
+
+        prop = batch.parameters["properties"]["items"]
+        assert prop["type"] == "array"
+
+    def test_decorator_without_docstring(self):
+        """无 docstring 时不应崩溃。"""
+
+        @tool
+        def no_doc(x: int) -> int:
+            return x * 2
+
+        assert no_doc.description == ""
+
     def test_decorator_with_pydantic(self):
         """Pydantic 参数模型精确控制 schema 并提供运行时校验。"""
         from pydantic import BaseModel, Field
@@ -127,3 +159,33 @@ class TestToolKit:
         result = kit.execute("nobody", {})
         assert not result.success
         assert "not found" in result.error
+
+    def test_toolkit_chain_add(self):
+        """链式 add 应该工作。"""
+
+        @tool
+        def a(x: int) -> int:
+            """A."""
+            return x
+
+        @tool
+        def b(x: int) -> int:
+            """B."""
+            return x
+
+        kit = ToolKit()
+        kit.add(a).add(b)
+        assert len(kit.list()) == 2
+
+    def test_toolkit_duplicate_raises(self):
+        """重复注册应该抛出异常。"""
+
+        @tool
+        def dup(x: int) -> int:
+            """Dup."""
+            return x
+
+        kit = ToolKit()
+        kit.add(dup)
+        with pytest.raises(ValueError, match="already registered"):
+            kit.add(dup)

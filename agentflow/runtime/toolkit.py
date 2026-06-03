@@ -1,34 +1,98 @@
 """ToolKit: @tool 装饰器 + 统一工具集合，支持本地/MCP/REST 三源统一。"""
 
 import inspect
-from typing import Callable, Optional, Any, List, get_type_hints
+import logging
+import types
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
-from agentflow.runtime.tool_registry import Tool, ToolType, ToolResult, ToolRegistry
+from agentflow.runtime.tool_registry import Tool, ToolResult, ToolRegistry, ToolType
 
 # Re-export for convenience
 __all__ = ["tool", "ToolKit", "Tool", "ToolType", "ToolResult"]
 
+logger = logging.getLogger(__name__)
+
+_BASE_TYPE_MAP: dict = {
+    int: "integer",
+    float: "number",
+    str: "string",
+    bool: "boolean",
+    dict: "object",
+    list: "array",
+}
+
 
 def _type_to_json_schema(py_type) -> dict:
-    """将 Python 类型注解转为 JSON Schema 基本类型。"""
-    mapping = {
-        int: "integer",
-        float: "number",
-        str: "string",
-        bool: "boolean",
-        dict: "object",
-        list: "array",
-        type(None): "null",
-    }
-    type_str = mapping.get(py_type, "string")
-    return {"type": type_str}
+    """将 Python 类型注解转为 JSON Schema 基本类型。
+
+    支持:
+        - 基本类型 (int, str, float, bool, dict, list)
+        - Optional[X] / Union[X, None]
+        - X | None (PEP 604)
+        - list[X] / List[X]
+        - dict[str, X] / Dict[str, X]
+    """
+    # --- 1. Optional[X] / Union[X, None] ---
+    origin = get_origin(py_type)
+    if origin is Union:
+        args = get_args(py_type)
+        non_none_args = [a for a in args if a is not type(None)]
+        if len(non_none_args) == 1:
+            return _type_to_json_schema(non_none_args[0])
+        raise TypeError(
+            f"Unsupported Union type annotation: {py_type}. "
+            f"Only Optional[X] (Union[X, None]) is supported."
+        )
+
+    # --- 2. X | None (PEP 604, Python >= 3.10) ---
+    union_type = getattr(types, "UnionType", None)
+    if union_type is not None and isinstance(py_type, union_type):
+        args = py_type.__args__
+        non_none_args = [a for a in args if a is not type(None)]
+        if len(non_none_args) == 1:
+            return _type_to_json_schema(non_none_args[0])
+        raise TypeError(
+            f"Unsupported union type annotation: {py_type}. "
+            f"Only X | None is supported."
+        )
+
+    # --- 3. list[X] / List[X] ---
+    if origin is list:
+        item_type = get_args(py_type)
+        schema: dict = {"type": "array"}
+        if item_type:
+            schema["items"] = _type_to_json_schema(item_type[0])
+        return schema
+
+    # --- 4. dict[str, X] / Dict[str, X] ---
+    if origin is dict:
+        return {"type": "object"}
+
+    # --- 5. Bare types (int, str, float, etc.) ---
+    type_name = _BASE_TYPE_MAP.get(py_type)
+    if type_name is not None:
+        return {"type": type_name}
+
+    # --- 6. Unknown ---
+    raise TypeError(f"Unsupported type annotation: {py_type}")
 
 
 def _function_to_parameters(func: Callable) -> dict:
     """从函数签名 + 类型注解推导 JSON Schema parameters。"""
     try:
         hints = get_type_hints(func)
-    except Exception:
+    except (NameError, KeyError):
+        logger.warning("Failed to resolve type hints for %s", func.__name__)
         hints = {}
     sig = inspect.signature(func)
     properties = {}
