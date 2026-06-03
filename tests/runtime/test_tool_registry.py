@@ -14,6 +14,23 @@ class TestTool:
                  endpoint="https://api.weather.com/v1")
         assert t.endpoint == "https://api.weather.com/v1"
 
+    def test_tool_with_pydantic_validation(self):
+        from pydantic import BaseModel, Field
+
+        class AddParams(BaseModel):
+            a: int = Field(description="First number")
+            b: int = Field(description="Second number")
+
+        t = Tool(name="add", description="Add numbers", tool_type=ToolType.LOCAL,
+                 func=lambda a, b: a + b,
+                 params_model=AddParams)
+
+        validated = t.validate_params({"a": 1, "b": 2})
+        assert validated == {"a": 1, "b": 2}
+
+        with pytest.raises(Exception):
+            t.validate_params({"a": "not_a_number", "b": 2})
+
 
 class TestToolRegistry:
     def test_register_and_list(self):
@@ -41,3 +58,21 @@ class TestToolRegistry:
         result = reg.execute("ghost", {})
         assert result.success is False
         assert "not found" in result.error
+
+    def test_execute_with_pydantic_validation(self):
+        from pydantic import BaseModel, Field
+
+        class AddParams(BaseModel):
+            a: int = Field(description="First number")
+            b: int = Field(description="Second number")
+
+        reg = ToolRegistry()
+        reg.register(Tool(name="add", description="Add numbers", tool_type=ToolType.LOCAL,
+                          func=lambda a, b: a + b,
+                          params_model=AddParams))
+        result = reg.execute("add", {"a": 1, "b": 2})
+        assert result.success is True
+        assert result.output == "3"
+
+        result = reg.execute("add", {"a": "not_a_number", "b": 2})
+        assert result.success is False
