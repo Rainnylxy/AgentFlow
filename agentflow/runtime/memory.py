@@ -1,73 +1,57 @@
-"""Memory Manager：短期记忆（滑动窗口 + 摘要）+ 长期记忆（向量库检索）"""
+"""Memory Manager — backward-compatible re-exports.
 
-from dataclasses import dataclass
+This module is kept for backward compatibility.
+New code should import from agentflow.runtime.memory directly.
+"""
+
 from typing import Optional
-from collections import OrderedDict
+from agentflow.runtime.memory.working import Message, WorkingMemory
+from agentflow.runtime.memory.semantic import SemanticMemory
+from agentflow.runtime.memory.manager import MemoryManager
 
 
-@dataclass
-class Message:
-    role: str
-    content: str
-    tool_call_id: str = ""
-    tool_calls: list = None
+class ShortTermMemory(WorkingMemory):
+    """Backward-compatible wrapper for WorkingMemory.
 
-    def __post_init__(self):
-        if self.tool_calls is None:
-            self.tool_calls = []
+    Old API used ``max_messages`` (instead of ``max_turns``)
+    and exposed ``get_messages()``.
+    """
 
-
-class ShortTermMemory:
     def __init__(self, max_messages: int = 20, max_tokens: int = 8000):
-        self.max_messages = max_messages
-        self.max_tokens = max_tokens
-        self._messages: list[Message] = []
-
-    def add(self, message: Message) -> None:
-        self._messages.append(message)
-        while len(self._messages) > self.max_messages:
-            self._messages.pop(0)
+        super().__init__(max_turns=max_messages, max_tokens=max_tokens)
 
     def get_messages(self) -> list[Message]:
+        """Return the full internal message list (old API)."""
         return list(self._messages)
 
-    def get_context_window(self) -> list[Message]:
-        result = []
-        total_chars = 0
-        char_limit = self.max_tokens * 4  # 1 token ≈ 4 chars
-        for msg in reversed(self._messages):
-            total_chars += len(msg.content)
-            if total_chars > char_limit:
-                break
-            result.insert(0, msg)
-        return result
 
-    def clear(self) -> None:
-        self._messages.clear()
+class LongTermMemory(SemanticMemory):
+    """Backward-compatible wrapper for SemanticMemory.
 
-
-class LongTermMemory:
-    def __init__(self):
-        self._store: OrderedDict[str, dict] = OrderedDict()
+    Old API used ``store(key, value_dict)`` with a dict as second
+    argument, and the search scanned keys + values.
+    """
 
     def store(self, key: str, value: dict) -> None:
-        self._store[key] = value
+        """Accept old ``(key, dict)`` signature.
+
+        Converts the dict to a string for the new content field
+        and keeps the dict as metadata.
+        """
+        content = str(value)
+        super().store(key, content=content, metadata=value)
 
     def search(self, query: str) -> list[dict]:
+        """Old-style search that also matches against the key."""
         results = []
-        for key, value in self._store.items():
-            if any(w.lower() in key.lower() or w.lower() in str(value).lower()
-                   for w in query.split()):
-                results.append({"key": key, **value})
+        query_words = query.lower().split()
+        for key, entry in self._store.items():
+            key_match = any(w in key.lower() for w in query_words)
+            content_text = entry.get("content", "")
+            content_match = any(w in content_text.lower() for w in query_words)
+            if key_match or content_match:
+                results.append({"key": key, **entry.get("metadata", {})})
         return results
 
-    def get(self, key: str) -> Optional[dict]:
-        return self._store.get(key)
 
-
-class MemoryManager:
-    def __init__(self, short_term_max: int = 20, short_term_tokens: int = 8000):
-        self.short_term = ShortTermMemory(
-            max_messages=short_term_max, max_tokens=short_term_tokens
-        )
-        self.long_term = LongTermMemory()
+__all__ = ["Message", "ShortTermMemory", "LongTermMemory", "MemoryManager"]
