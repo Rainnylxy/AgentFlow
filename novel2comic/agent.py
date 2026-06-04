@@ -19,6 +19,7 @@ import json
 import os
 import sys
 from datetime import datetime
+from typing import Optional
 
 # 添加 AgentFlow 到路径（开发阶段）
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -49,10 +50,10 @@ class ComicStoryboardRole(Section):
             "你的任务是将小说文字转化为可视化分镜脚本，"
             "为每一格生成画面描述和 Stable Diffusion/DALL-E 生图 prompt。\n\n"
             "## 工作流程（严格按顺序）\n"
-            "1. 调用 analyze_text 分析文本类型、风格、人物、基调\n"
-            "2. 调用 extract_scenes 拆分为关键场景\n"
-            "3. 对每个场景依次调用 storyboard_scene 生成分镜\n"
-            "4. 调用 compile_chapter 汇总为完整 Markdown 分镜脚本\n"
+            "1. 调用 save_analysis 保存文本分析结果（类型、风格、人物、基调）\n"
+            "2. 调用 save_scenes 保存场景拆分结果\n"
+            "3. 对每个场景依次调用 save_storyboard 保存分镜\n"
+            "4. 所有场景处理完毕后，调用 compile_final_output 汇总为最终的 Markdown 分镜脚本\n"
             "注意：必须等待上一步工具返回结果后再执行下一步。"
         )
 
@@ -136,132 +137,275 @@ def create_prompt_template() -> PromptTemplate:
 
 
 # ============================================================
-# 4 个 Tool
+# 工作目录（Tool 做真实 I/O 时使用）
 # ============================================================
 
-@tool
-def analyze_text(text: str) -> str:
-    """分析小说文本的类型、风格、人物和情感基调。
+_WORK_DIR: Optional[str] = None
 
-    分析维度：
-    - type: 小说类型（玄幻/都市/校园/科幻/悬疑/...）
-    - style: 推荐漫画风格（manga 或 webtoon）
+
+def _get_work_dir() -> str:
+    global _WORK_DIR
+    if _WORK_DIR is None:
+        _WORK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
+    os.makedirs(_WORK_DIR, exist_ok=True)
+    return _WORK_DIR
+
+
+def _set_work_dir(path: str) -> None:
+    global _WORK_DIR
+    _WORK_DIR = path
+    os.makedirs(_WORK_DIR, exist_ok=True)
+
+
+# ============================================================
+# 4 个 Tool —— 每个都做真实 I/O 工作，不是返回指令
+# ============================================================
+
+_VALID_STYLES = {"manga", "webtoon", "auto"}
+
+
+@tool
+def save_analysis(analysis_json: str) -> str:
+    """保存文本分析结果到工作目录。
+
+    分析结果必须是 JSON 格式，包含：
+    - type: 小说类型
+    - recommended_style: 推荐漫画风格（manga 或 webtoon）
     - characters: 人物列表 [{name, role, traits}]
     - tone: 整体基调
     - era: 时代背景
 
-    返回 JSON 格式分析结果。
+    Args:
+        analysis_json: JSON 格式的分析结果字符串
     """
-    return json.dumps({
-        "status": "analyzed",
-        "instruction": (
-            "Analyze the provided text and return a JSON object with: "
-            "type (genre), recommended_style (manga or webtoon), "
-            "characters (list of {name, role, traits}), "
-            "tone (emotional tone), era (time period). "
-            "Output ONLY the JSON, no other text."
+    try:
+        data = json.loads(analysis_json)
+        style = data.get("recommended_style", "auto")
+        if style not in _VALID_STYLES:
+            return f"[错误] recommended_style 必须是 manga/webtoon/auto，收到: {style}"
+
+        work_dir = _get_work_dir()
+        path = os.path.join(work_dir, "_analysis.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        chars = data.get("characters", [])
+        char_names = [c.get("name", "?") for c in chars]
+        return (
+            f"✅ 分析结果已保存 ({len(char_names)} 个人物: {', '.join(char_names)})\n"
+            f"   类型: {data.get('type', '?')}\n"
+            f"   风格: {style}\n"
+            f"   基调: {data.get('tone', '?')}\n"
+            f"   文件: {path}"
         )
-    }, ensure_ascii=False)
+    except json.JSONDecodeError as e:
+        return f"[错误] analysis_json 不是有效的 JSON: {e}"
 
 
 @tool
-def extract_scenes(text: str, max_scenes: int = 6) -> str:
-    """将文本拆分为关键叙事场景。
+def save_scenes(scenes_json: str) -> str:
+    """保存场景拆分结果到工作目录。
 
-    每个场景是一个有起承转合的完整叙事单元。
+    必须是 JSON 数组，每个元素包含：
+    {id, title, summary, characters_involved, emotion, key_dialogue}
 
     Args:
-        text: 小说文本
-        max_scenes: 最多拆几个场景（默认 6，上限 8）
-
-    返回 JSON 数组: [{id, title, summary, characters_involved, emotion, key_dialogue}]
+        scenes_json: JSON 格式的场景数组字符串
     """
-    return json.dumps({
-        "status": "scenes_extracted",
-        "instruction": (
-            f"Extract up to {max_scenes} key narrative scenes from the text. "
-            "For each scene output a JSON array of objects with fields: "
-            "id (number), title (short descriptive name), "
-            "summary (1-2 sentences of what happens), "
-            "characters_involved (list of character names), "
-            "emotion (dominant emotion), "
-            "key_dialogue (the most important line, or empty string). "
-            "Output ONLY the JSON array, no other text."
+    try:
+        scenes = json.loads(scenes_json)
+        if not isinstance(scenes, list):
+            return f"[错误] scenes_json 必须是 JSON 数组，收到: {type(scenes).__name__}"
+        if len(scenes) == 0:
+            return "[错误] 场景列表为空，请至少提取 1 个场景"
+        if len(scenes) > 8:
+            return f"[错误] 场景数 ({len(scenes)}) 超过上限 (8)，请合并或减少场景"
+
+        work_dir = _get_work_dir()
+        path = os.path.join(work_dir, "_scenes.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(scenes, f, ensure_ascii=False, indent=2)
+
+        titles = [s.get("title", f"场景{s.get('id', '?')}") for s in scenes]
+        return (
+            f"✅ 已保存 {len(scenes)} 个场景:\n"
+            + "\n".join(f"   {i+1}. {t}" for i, t in enumerate(titles))
+            + f"\n   文件: {path}"
         )
-    }, ensure_ascii=False)
+    except json.JSONDecodeError as e:
+        return f"[错误] scenes_json 不是有效的 JSON: {e}"
 
 
 @tool
-def storyboard_scene(
-    scene_summary: str,
-    characters: str,
-    style: str = "auto",
-    panels_per_scene: int = 4
-) -> str:
-    """为一个场景生成完整的漫画分镜。
+def save_storyboard(scene_id: int, panels_json: str) -> str:
+    """保存单个场景的漫画分镜到工作目录。
 
-    根据场景摘要和人物信息，生成该场景每格的画面描述和生图 prompt。
+    panels_json 必须是 JSON 数组，每格包含：
+    {panel_number, visual_description, character_action, dialogue, camera_angle, mood, sd_prompt}
 
     Args:
-        scene_summary: 该场景的摘要
-        characters: JSON 格式人物列表
-        style: manga/webtoon/auto
-        panels_per_scene: 分镜格数（3-6 之间）
-
-    返回 JSON 数组:
-    [{panel_number, visual_description, character_action, dialogue, camera_angle, mood, sd_prompt}]
+        scene_id: 场景编号（从 1 开始）
+        panels_json: JSON 格式的分镜面板数组字符串
     """
-    return json.dumps({
-        "status": "storyboard_ready",
-        "instruction": (
-            f"Generate a storyboard with {panels_per_scene} panels for this scene "
-            f"in {style} style. "
-            f"Scene: {scene_summary}. "
-            f"Characters: {characters}. "
-            "For each panel, output a JSON object with fields: "
-            "panel_number (int), "
-            "visual_description (Chinese text describing the composition — foreground, midground, background), "
-            "character_action (what the character is doing, in Chinese), "
-            "dialogue (the spoken line, or empty string), "
-            "camera_angle (Chinese description of shot type — 特写/中景/远景/俯视/仰视etc), "
-            "mood (emotional tone of this panel, in Chinese), "
-            "sd_prompt (English Stable Diffusion prompt with anime/manga/webtoon style keywords, aspect ratio, key visual elements). "
-            "Output ONLY the JSON array, no other text."
+    try:
+        panels = json.loads(panels_json)
+        if not isinstance(panels, list):
+            return f"[错误] panels_json 必须是 JSON 数组，收到: {type(panels).__name__}"
+        if len(panels) == 0:
+            return f"[错误] 场景 {scene_id} 的分镜面板数为 0，每场景至少需要 1 格"
+        if len(panels) > 10:
+            return f"[错误] 场景 {scene_id} 的分镜面板数 ({len(panels)}) 过多，建议 3-6 格"
+
+        # 校验每格必填字段
+        required_fields = ["panel_number", "visual_description", "dialogue", "sd_prompt"]
+        for p in panels:
+            missing = [f for f in required_fields if f not in p]
+            if missing:
+                return f"[错误] 场景 {scene_id} 第 {p.get('panel_number', '?')} 格缺少字段: {missing}"
+
+        work_dir = _get_work_dir()
+        path = os.path.join(work_dir, f"scene_{scene_id:02d}_storyboard.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(panels, f, ensure_ascii=False, indent=2)
+
+        return (
+            f"✅ 场景 {scene_id} 分镜已保存 ({len(panels)} 格)\n"
+            f"   文件: {path}"
         )
-    }, ensure_ascii=False)
+    except json.JSONDecodeError as e:
+        return f"[错误] panels_json 不是有效的 JSON: {e}"
 
 
 @tool
-def compile_chapter(
-    chapter_title: str,
-    scenes_storyboard: str,
-    style: str = "auto"
-) -> str:
-    """将全部分镜汇总为最终的 Markdown 分镜脚本。
+def compile_final_output(chapter_title: str, style: str = "auto") -> str:
+    """读取工作目录中所有已保存的分析、场景、分镜文件，汇总为最终的 Markdown 分镜脚本。
+
+    必须按顺序执行：save_analysis → save_scenes → save_storyboard(每个场景) → compile_final_output。
+    如果找不到中间文件，会返回错误。
 
     Args:
         chapter_title: 章节标题
-        scenes_storyboard: JSON 格式的全部分镜数据
-        style: 漫画风格
+        style: 漫画风格 (manga/webtoon/auto)
 
-    返回完整的 Markdown 格式分镜脚本文件内容。
+    返回最终 Markdown 文件路径。
     """
-    return json.dumps({
-        "status": "compiled",
-        "instruction": (
-            f"Compile all storyboards into a final Markdown document. "
-            f"Title: '{chapter_title}', Style: {style}. "
-            f"Use the following structure:\n"
-            f"# {chapter_title}\n"
-            f"## 基础信息\n(style, generated date placeholder, style rationale)\n"
-            f"## 人物一览\n(table with columns: 姓名 | 身份 | 外貌/特征)\n"
-            f"## 场景1: [场景标题]\n### 格1: [画面概述]\n"
-            f"(then for each panel: 画面描述, 台词, 镜头, 情绪, **SD Prompt**: ...)\n"
-            f"...repeat for all panels and all scenes...\n"
-            f"## SD Prompts 汇总\n(numbered list of all prompts)\n\n"
-            f"Scenes data: {scenes_storyboard}"
-        )
-    }, ensure_ascii=False)
+    if style not in _VALID_STYLES:
+        return f"[错误] style 必须是 manga/webtoon/auto，收到: {style}"
+
+    work_dir = _get_work_dir()
+
+    # 读取分析结果
+    analysis_path = os.path.join(work_dir, "_analysis.json")
+    if not os.path.exists(analysis_path):
+        return f"[错误] 未找到分析文件 {analysis_path}，请先调用 save_analysis"
+    with open(analysis_path, "r", encoding="utf-8") as f:
+        analysis = json.load(f)
+
+    # 读取场景列表
+    scenes_path = os.path.join(work_dir, "_scenes.json")
+    if not os.path.exists(scenes_path):
+        return f"[错误] 未找到场景文件 {scenes_path}，请先调用 save_scenes"
+    with open(scenes_path, "r", encoding="utf-8") as f:
+        scenes = json.load(f)
+
+    # 读取所有场景分镜文件
+    storyboards = []
+    for scene in scenes:
+        sid = scene.get("id", len(storyboards) + 1)
+        sb_path = os.path.join(work_dir, f"scene_{int(sid):02d}_storyboard.json")
+        if os.path.exists(sb_path):
+            with open(sb_path, "r", encoding="utf-8") as f:
+                storyboards.append({"scene": scene, "panels": json.load(f)})
+        else:
+            storyboards.append({"scene": scene, "panels": [], "missing": True})
+
+    # 组装 Markdown
+    now = datetime.now()
+    lines = []
+    lines.append(f"# {chapter_title}")
+    lines.append("")
+    lines.append("## 基础信息")
+    lines.append("")
+    lines.append(f"- **章节**: {chapter_title}")
+    lines.append(f"- **风格**: {style}")
+    lines.append(f"- **类型**: {analysis.get('type', '?')}")
+    lines.append(f"- **基调**: {analysis.get('tone', '?')}")
+    lines.append(f"- **时代**: {analysis.get('era', '?')}")
+    lines.append(f"- **生成时间**: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append("")
+
+    # 人物表
+    characters = analysis.get("characters", [])
+    if characters:
+        lines.append("## 人物一览")
+        lines.append("")
+        lines.append("| 姓名 | 身份 | 特征 |")
+        lines.append("|------|------|------|")
+        for c in characters:
+            name = c.get("name", "?")
+            role = c.get("role", "?")
+            traits = ", ".join(c.get("traits", [])) if isinstance(c.get("traits"), list) else c.get("traits", "?")
+            lines.append(f"| {name} | {role} | {traits} |")
+        lines.append("")
+
+    # 每个场景的分镜
+    all_prompts = []
+    for idx, sb in enumerate(storyboards, 1):
+        scene = sb["scene"]
+        panels = sb["panels"]
+        lines.append(f"## 场景{idx}: {scene.get('title', f'场景{idx}')}")
+        lines.append("")
+        lines.append(f"> **摘要**: {scene.get('summary', '')}")
+        lines.append(f"> **情绪**: {scene.get('emotion', '')}")
+        if scene.get("key_dialogue"):
+            lines.append(f"> **关键台词**: 「{scene['key_dialogue']}」")
+        lines.append("")
+
+        if sb.get("missing"):
+            lines.append("⚠️ 该场景的分镜文件缺失")
+            lines.append("")
+            continue
+
+        for p in panels:
+            pn = p.get("panel_number", "?")
+            lines.append(f"### 格{pn}: {p.get('visual_description', '')[:60]}...")
+            lines.append("")
+            lines.append(f"- **画面描述**: {p.get('visual_description', '')}")
+            lines.append(f"- **角色动作**: {p.get('character_action', '')}")
+            if p.get("dialogue"):
+                lines.append(f"- **台词**: 「{p['dialogue']}」")
+            lines.append(f"- **镜头**: {p.get('camera_angle', '')}")
+            lines.append(f"- **情绪**: {p.get('mood', '')}")
+            lines.append(f"- **SD Prompt**: `{p.get('sd_prompt', '')}`")
+            lines.append("")
+
+            if p.get("sd_prompt"):
+                all_prompts.append(f"格{pn}: {p['sd_prompt']}")
+
+    # SD Prompts 汇总
+    if all_prompts:
+        lines.append("## SD Prompts 汇总")
+        lines.append("")
+        for i, prompt in enumerate(all_prompts, 1):
+            lines.append(f"{i}. {prompt}")
+        lines.append("")
+
+    # 写入最终文件
+    safe_title = "".join(c if c.isalnum() or c in "._- " else "_" for c in chapter_title)
+    output_path = os.path.join(work_dir, f"{now.strftime('%Y%m%d_%H%M%S')}_{safe_title}.md")
+    content = "\n".join(lines)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    total_panels = sum(len(sb["panels"]) for sb in storyboards if not sb.get("missing"))
+    missing_count = sum(1 for sb in storyboards if sb.get("missing"))
+    return (
+        f"✅ 最终分镜脚本已生成\n"
+        f"   文件: {output_path}\n"
+        f"   场景数: {len(storyboards)} (其中 {missing_count} 个缺失分镜)\n"
+        f"   总格数: {total_panels}\n"
+        f"   SD Prompts: {len(all_prompts)} 个"
+    )
 
 
 # ============================================================
@@ -291,7 +435,7 @@ def build_agent():
 
     agent = (AgentBuilder("novel2comic")
         .with_llm(llm)
-        .with_tools(analyze_text, extract_scenes, storyboard_scene, compile_chapter)
+        .with_tools(save_analysis, save_scenes, save_storyboard, compile_final_output)
         .with_prompt(prompt)
         .with_memory(MemoryProfile.standard())
         .with_thinking(ThinkingMode.ADAPTIVE)
@@ -318,13 +462,13 @@ async def run_novel2comic(text: str, title: str = "未命名章节") -> str:
         f"## 小说原文\n{text}\n\n"
         f"## 任务\n"
         f"请严格按以下顺序执行：\n"
-        f"1. 调用 analyze_text 分析文本的类型、风格、人物、基调\n"
-        f"2. 根据 analyze_text 返回的 recommended_style 确定风格，"
-        f"调用 extract_scenes 拆分关键场景\n"
-        f"3. 对每个场景依次调用 storyboard_scene 生成分镜"
-        f"（使用上一步返回的 scenes 数组和 characters 列表）\n"
-        f"4. 所有场景处理完毕后，调用 compile_chapter 汇总为完整的 Markdown 分镜脚本\n\n"
-        f"风格默认为 auto（自动判断）。"
+        f"1. 分析文本，将结果作为 JSON 字符串传给 save_analysis 保存\n"
+        f"2. 拆分关键场景，将场景数组作为 JSON 字符串传给 save_scenes 保存\n"
+        f"3. 对每个场景依次生成分镜，将每个场景的分镜数组传给 save_storyboard 保存\n"
+        f"   （scene_id 从 1 开始递增，panels_json 为各格分镜的 JSON 数组）\n"
+        f"4. 所有场景处理完毕后，调用 compile_final_output(chapter_title=\"{title}\")\n"
+        f"   汇总为最终的 Markdown 分镜脚本\n\n"
+        f"注意：风格默认为 auto（自动判断），根据分析结果确定。"
     )
 
     print(f"[novel2comic] 开始处理: {title}")
@@ -332,24 +476,18 @@ async def run_novel2comic(text: str, title: str = "未命名章节") -> str:
 
     result = await agent.run(task)
 
-    # 保存到 outputs 目录
-    os.makedirs("outputs", exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_title = "".join(c if c.isalnum() or c in "._- " else "_" for c in title)
-    output_file = f"outputs/{timestamp}_{safe_title}.md"
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write(f"# Novel2Comic 分镜脚本\n\n")
-        f.write(f"- **章节**: {title}\n")
-        f.write(f"- **生成时间**: {datetime.now().isoformat()}\n")
-        f.write(f"- **原文长度**: {len(text)} 字符\n\n")
-        f.write("---\n\n")
-        f.write(result.output)
-
-    print(f"[novel2comic] 输出已保存: {output_file}")
+    print(f"[novel2comic] 处理完成")
     print(f"[novel2comic] Agent 执行步骤数: {len(result.steps)}")
     for i, step in enumerate(result.steps):
         step_type = step.get("type", step.get("phase", "?"))
-        print(f"    步骤{i}: {step_type}")
+        if step_type == "tool_call":
+            calls = step.get("calls", [])
+            print(f"    步骤{i}: 调用工具 → {', '.join(calls)}")
+        elif step_type == "final":
+            print(f"    步骤{i}: 最终输出")
+
+    print()
+    print(result.output[:500] + "..." if len(result.output) > 500 else result.output)
 
     return result.output
 
