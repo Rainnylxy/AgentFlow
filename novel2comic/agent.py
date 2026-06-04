@@ -217,7 +217,7 @@ def build_agent():
         .with_tools(save_final_storyboard)
         .with_prompt(prompt)
         .with_memory(MemoryProfile.light())       # 不需要复杂记忆
-        .with_thinking(ThinkingMode.PLAN_EXECUTE)  # 固定 PlanExecute
+        .with_thinking(ThinkingMode.REACT)  # ReAct 才完整支持 tool 调用循环
         .with_max_iterations(15)
         .build())
 
