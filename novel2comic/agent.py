@@ -245,6 +245,20 @@ async def run_novel2comic(text: str, title: str = "未命名章节") -> str:
 
     result = await agent.run(task)
 
+    tool_called = any(
+        s.get("type") == "tool_call" for s in result.steps
+    )
+
+    # 兜底保存（无论 LLM 有没有调 tool，都确保文件落地）
+    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
+    os.makedirs(output_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_title = "".join(c if c.isalnum() or c in "._- " else "_" for c in title)
+    path = os.path.join(output_dir, f"{timestamp}_{safe_title}.md")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(result.output)
+
     print(f"[novel2comic] 处理完成, 步骤数: {len(result.steps)}")
     for i, step in enumerate(result.steps):
         phase = step.get("phase", step.get("type", "?"))
@@ -253,6 +267,10 @@ async def run_novel2comic(text: str, title: str = "未命名章节") -> str:
         else:
             output_preview = step.get("output", "")[:80]
             print(f"  步骤{i}: [{phase}] {output_preview}...")
+
+    print(f"[novel2comic] 已保存: {path}")
+    if not tool_called:
+        print(f"[novel2comic] (兜底保存——LLM 未调用工具，内容直接从回复中保存)")
 
     return result.output
 
