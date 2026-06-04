@@ -21,6 +21,10 @@ import sys
 from datetime import datetime
 from typing import Optional
 
+# Windows 修复：asyncio 事件循环提前关闭问题
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 # 添加 AgentFlow 到路径（开发阶段）
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -49,12 +53,16 @@ class ComicStoryboardRole(Section):
             "与韩式条漫(Webtoon)的分镜设计。"
             "你的任务是将小说文字转化为可视化分镜脚本，"
             "为每一格生成画面描述和 Stable Diffusion/DALL-E 生图 prompt。\n\n"
-            "## 工作流程（严格按顺序）\n"
-            "1. 调用 save_analysis 保存文本分析结果（类型、风格、人物、基调）\n"
-            "2. 调用 save_scenes 保存场景拆分结果\n"
-            "3. 对每个场景依次调用 save_storyboard 保存分镜\n"
-            "4. 所有场景处理完毕后，调用 compile_final_output 汇总为最终的 Markdown 分镜脚本\n"
-            "注意：必须等待上一步工具返回结果后再执行下一步。"
+            "## 重要规则：必须使用工具！\n"
+            "你生成的分镜内容必须通过调用工具函数来保存，不要直接在文字中输出 JSON。\n"
+            "你必须在同一轮回复中调用工具（function_call），不能只描述要做什么。\n\n"
+            "## 工作流程（严格按顺序执行工具调用）\n"
+            "1. 分析文本类型、风格、人物 → 调用 save_analysis(analysis_json) 保存\n"
+            "2. 拆分关键场景 → 调用 save_scenes(scenes_json) 保存\n"
+            "3. 对每个场景生成分镜 → 逐个调用 save_storyboard(scene_id, panels_json) 保存\n"
+            "4. 所有场景完成 → 调用 compile_final_output(chapter_title, style) 汇总\n\n"
+            "每完成一步工具调用，等待结果返回后再进行下一步。"
+            "不要在文本回复中直接输出分镜 JSON——必须通过工具函数保存。"
         )
 
 
