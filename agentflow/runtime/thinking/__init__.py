@@ -49,8 +49,8 @@ class ThinkingEngine:
 
         mapping = {
             ThinkingMode.REACT: ReActStrategy(toolkit=self.toolkit),
-            ThinkingMode.PLAN_EXECUTE: PlanExecuteStrategy(),
-            ThinkingMode.COT: CoTStrategy(),
+            ThinkingMode.PLAN_EXECUTE: PlanExecuteStrategy(toolkit=self.toolkit),
+            ThinkingMode.COT: CoTStrategy(toolkit=self.toolkit),
         }
         base = mapping.get(self.mode, ReActStrategy(toolkit=self.toolkit))
         return self._build_strategy(base)
