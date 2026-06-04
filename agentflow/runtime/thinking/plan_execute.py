@@ -13,6 +13,7 @@ class PlanExecuteStrategy(ThinkingStrategy):
 
     async def run(self, context: ThinkContext) -> ThinkResult:
         steps = []
+        tools_param = context.tools if context.tools else None
 
         # Phase 1: Plan
         plan_messages = [
@@ -22,7 +23,7 @@ class PlanExecuteStrategy(ThinkingStrategy):
                 "Break this down into clear steps. Output as a numbered plan."
             )},
         ]
-        plan_response = await context.llm_client.chat(plan_messages)
+        plan_response = await context.llm_client.chat(plan_messages, tools=tools_param)
         plan_text = plan_response.content
         steps.append({"phase": "plan", "output": plan_text})
 
@@ -35,7 +36,7 @@ class PlanExecuteStrategy(ThinkingStrategy):
                 "Execute the plan step by step. For each step, describe what you did and the result."
             )},
         ]
-        execute_response = await context.llm_client.chat(execute_messages)
+        execute_response = await context.llm_client.chat(execute_messages, tools=tools_param)
         steps.append({"phase": "execute", "output": execute_response.content})
 
         # Phase 3: Finalize
@@ -47,11 +48,22 @@ class PlanExecuteStrategy(ThinkingStrategy):
                 "Summarize the final answer concisely."
             )},
         ]
-        final_response = await context.llm_client.chat(finalize_messages)
+        final_response = await context.llm_client.chat(finalize_messages, tools=tools_param)
         steps.append({"phase": "finalize", "output": final_response.content})
+
+        # 收集所有阶段中的 tool_calls
+        all_tool_calls = []
+        for resp in [plan_response, execute_response, final_response]:
+            if hasattr(resp, 'tool_calls') and resp.tool_calls:
+                for tc in resp.tool_calls:
+                    all_tool_calls.append({
+                        "tool": tc["function"]["name"],
+                        "input": tc["function"]["arguments"],
+                    })
 
         return ThinkResult(
             output=final_response.content,
+            tool_calls=all_tool_calls,
             steps=steps,
             mode_used="plan_execute",
         )
