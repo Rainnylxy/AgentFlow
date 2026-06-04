@@ -197,8 +197,8 @@ def save_final_storyboard(markdown_content: str, chapter_title: str) -> str:
 def build_agent():
     """构建 Novel2Comic Agent。"""
     api_key = os.getenv("AGENTFLOW_API_KEY", "")
-    base_url = os.getenv("AGENTFLOW_BASE_URL", "https://api.deepseek.com/v1")
-    model = os.getenv("AGENTFLOW_MODEL", "deepseek-chat")
+    base_url = os.getenv("AGENTFLOW_BASE_URL", "https://api.deepseek.com/")
+    model = os.getenv("AGENTFLOW_MODEL", "deepseek-v4-pro")
     proxy = os.getenv("AGENTFLOW_PROXY", "")
 
     if not api_key:
@@ -249,28 +249,19 @@ async def run_novel2comic(text: str, title: str = "未命名章节") -> str:
         s.get("type") == "tool_call" for s in result.steps
     )
 
-    # 兜底保存（无论 LLM 有没有调 tool，都确保文件落地）
-    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
-    os.makedirs(output_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_title = "".join(c if c.isalnum() or c in "._- " else "_" for c in title)
-    path = os.path.join(output_dir, f"{timestamp}_{safe_title}.md")
-
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(result.output)
-
     print(f"[novel2comic] 处理完成, 步骤数: {len(result.steps)}")
     for i, step in enumerate(result.steps):
         phase = step.get("phase", step.get("type", "?"))
         if phase == "tool_call":
-            print(f"  步骤{i}: 调用工具 → {step.get('calls', [])}")
+            print(f"  步骤{i}: [TOOL] 调用 → {step.get('calls', [])}")
         else:
             output_preview = step.get("output", "")[:80]
             print(f"  步骤{i}: [{phase}] {output_preview}...")
 
-    print(f"[novel2comic] 已保存: {path}")
-    if not tool_called:
-        print(f"[novel2comic] (兜底保存——LLM 未调用工具，内容直接从回复中保存)")
+    if tool_called:
+        print(f"[novel2comic] ✅ 工具已被调用，文件由 save_final_storyboard 保存")
+    else:
+        print(f"[novel2comic] ❌ LLM 未调用工具——工具注册或策略传参可能有问题")
 
     return result.output
 
