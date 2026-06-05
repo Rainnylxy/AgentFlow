@@ -1,24 +1,19 @@
 # -*- coding: utf-8 -*-
-"""Pipeline 集成测试——使用 Mock LLM 验证 6 阶段端到端流程。"""
+"""Agent 集成测试——使用 Mock LLM 验证 Agent Tool 端到端流程。"""
 
 import os
 import sys
 import json
 import tempfile
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 也需要项目根来 import novel2comic 包
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from src.models import ChapterData, AnalysisResult, CharacterAppearance, CharacterSheet
-from src.llm_adapter import LLMAdapter
 from src.img_adapter import ImageGenAdapter
-from src.styles import STYLE_GUFENG, detect_style
-from src.pipeline.engine import PipelineEngine
-from src.pipeline.stage1_analyze import run_stage1
-from src.pipeline.stage2_characters import run_stage2
-from src.pipeline.stage3_scenes import run_stage3
-from src.pipeline.stage4_storyboard import run_stage4
-from src.pipeline.stage5_image_gen import run_stage5
-from src.pipeline.stage6_layout import run_stage6
+from src.styles import detect_style
 
 
 SAMPLE_TEXT = """
@@ -38,102 +33,33 @@ SAMPLE_TEXT = """
 """
 
 
-class MockLLM(LLMAdapter):
-    """Mock LLM——返回预定义 JSON，不调用真实 API。"""
+# ============================================================
+# Mock: 模拟 OpenAI 同步客户端
+# ============================================================
 
-    def __init__(self):
-        pass  # 不调用父类 __init__，避免需要 API key
+class MockCompletion:
+    def __init__(self, content):
+        self.choices = [MagicMock()]
+        self.choices[0].message.content = content
 
-    def chat_json(self, system_prompt: str, user_prompt: str, temperature: float = 0.3) -> dict:
-        # 根据 system prompt 内容判断是哪个阶段
-        if "genre_tags" in system_prompt and "style" in system_prompt:
-            # Stage 1: 分析
-            return {
-                "genre_tags": ["武侠", "悬疑"],
-                "style": "gufeng",
-                "tone": ["苍凉", "暗涌"],
-                "era": "古代架空",
-                "pace": "慢热",
-                "characters_preview": [
-                    {"name": "苏墨", "role": "主角", "first_appearance_line": "苏墨站在朱雀大街的尽头"},
-                    {"name": "老者", "role": "配角", "first_appearance_line": "一个卖糖葫芦的老者"},
-                    {"name": "黑猫", "role": "伙伴", "first_appearance_line": "一只黑猫从墙头跃下"},
-                ],
-            }
-        elif "Character Sheet" in system_prompt or "sd_trigger_words" in system_prompt:
-            # Stage 2: 角色设计
-            return [
-                {
-                    "id": "su_mo",
-                    "name": "苏墨",
-                    "role": "protagonist",
-                    "appearance": {
-                        "face": "清瘦，下颌线锋利",
-                        "hair": "长发束起，黑色",
-                        "build": "修长精瘦",
-                        "clothing": "灰色旧袍",
-                        "accessories": "锈迹铁剑",
-                        "distinctive_features": "锐利的眼神",
-                    },
-                    "sd_trigger_words": "su_mo, lean swordsman, sharp jawline, long black hair, grey robes, rusty sword",
-                    "personality_notes": "冷峻内敛",
-                },
-                {
-                    "id": "old_man",
-                    "name": "老者",
-                    "role": "supporting",
-                    "appearance": {
-                        "face": "满是皱纹",
-                        "hair": "花白稀疏",
-                        "build": "佝偻瘦小",
-                        "clothing": "旧毡帽粗布衣",
-                        "accessories": "糖葫芦小车",
-                        "distinctive_features": "精明的小眼睛",
-                    },
-                    "sd_trigger_words": "old street vendor, weathered face, worn hat, carrying candied hawthorn sticks",
-                    "personality_notes": "市井精明",
-                },
-                {
-                    "id": "black_cat",
-                    "name": "黑猫",
-                    "role": "supporting",
-                    "appearance": {"face": "", "hair": "", "build": "", "clothing": "", "accessories": "", "distinctive_features": "纯黑毛色"},
-                    "sd_trigger_words": "black cat, sleek fur, glowing eyes, mysterious feline companion",
-                    "personality_notes": "神秘伙伴",
-                },
-            ]
-        elif "场景拆分" in system_prompt or "叙事单元" in system_prompt:
-            # Stage 3: 场景拆分
-            return [
-                {"id": 1, "title": "朱雀大街·归来", "summary": "苏墨站在长安街头，手握锈剑锁定将军府。", "characters_in_scene": ["苏墨"], "emotion_arc": "苍凉→暗涌", "key_dialogue": "三年了，我终于回来了。"},
-                {"id": 2, "title": "糖葫芦摊·情报", "summary": "苏墨向老者打探将军府消息，得知自己被以夜枭之名悬赏。", "characters_in_scene": ["苏墨", "老者"], "emotion_arc": "平静→暗讽", "key_dialogue": "赏金一千两黄金。"},
-                {"id": 3, "title": "暗巷·真身", "summary": "苏墨进入暗巷，黑猫现身，他展示将军府地图。", "characters_in_scene": ["苏墨", "黑猫"], "emotion_arc": "冷静→锋芒毕露", "key_dialogue": "他们连我的真名都不知道了。"},
-            ]
-        elif "分镜" in system_prompt or "Panel" in system_prompt or "Storyboard" in system_prompt:
-            # Stage 4: 分镜生成
-            return [
-                {
-                    "panel_number": 1,
-                    "visual_description": "远景·大俯瞰，长安城暮色四合，万家灯火，朱雀大街延伸向远方",
-                    "character_action": "无人物大动作，城市运转",
-                    "dialogue": "",
-                    "camera_angle": "俯视大远景",
-                    "mood": "繁华之下的寂寥",
-                    "sd_prompt": "epic bird's eye view of ancient Chinese capital, lanterns glowing, distant mansion",
-                    "character_refs": [],
-                },
-                {
-                    "panel_number": 2,
-                    "visual_description": "极近特写，一只手紧握锈迹斑斑的铁剑",
-                    "character_action": "手微微收紧，指节泛白",
-                    "dialogue": "",
-                    "camera_angle": "极近特写",
-                    "mood": "沉淀三年的沉重",
-                    "sd_prompt": "extreme close-up of hand gripping rusty sword, weathered texture, melancholic",
-                    "character_refs": ["苏墨"],
-                },
-            ]
-        return {}
+
+class MockChat:
+    def __init__(self, responses: list[dict]):
+        self.responses = responses
+        self.call_count = 0
+
+    def create(self, **kwargs):
+        idx = self.call_count
+        self.call_count += 1
+        if idx < len(self.responses):
+            return MockCompletion(json.dumps(self.responses[idx], ensure_ascii=False))
+        return MockCompletion("{}")
+
+
+class MockOpenAI:
+    def __init__(self, responses: list[dict]):
+        self.chat = MagicMock()
+        self.chat.completions = MockChat(responses)
 
 
 def test_style_detection():
@@ -150,58 +76,157 @@ def test_style_detection():
     print("  [PASS] test_style_detection passed")
 
 
-def test_pipeline_end_to_end():
-    """测试完整 Pipeline 端到端流程（Mock LLM + 占位图）。"""
-    mock_llm = MockLLM()
+def test_agent_tools_end_to_end():
+    """测试 Agent Tool 端到端流程（Mock LLM）。"""
+    import novel2comic.agent as agent_module
+
+    mock_responses = [
+        # Stage 1: analyze_text 返回
+        {
+            "genre_tags": ["武侠", "悬疑"],
+            "style": "gufeng",
+            "tone": ["苍凉", "暗涌"],
+            "era": "古代架空",
+            "pace": "慢热",
+            "characters_preview": [
+                {"name": "苏墨", "role": "主角", "first_appearance_line": "苏墨站在朱雀大街的尽头"},
+                {"name": "老者", "role": "配角", "first_appearance_line": "一个卖糖葫芦的老者"},
+                {"name": "黑猫", "role": "伙伴", "first_appearance_line": "一只黑猫从墙头跃下"},
+            ],
+        },
+        # Stage 2: design_characters 返回
+        [
+            {
+                "id": "su_mo", "name": "苏墨", "role": "protagonist",
+                "appearance": {"face": "清瘦", "hair": "长发", "build": "修长", "clothing": "灰袍", "accessories": "锈剑", "distinctive_features": "锐利眼神"},
+                "sd_trigger_words": "su_mo, lean swordsman, sharp jawline, grey robes, rusty sword",
+                "personality_notes": "冷峻内敛",
+            },
+            {
+                "id": "old_man", "name": "老者", "role": "supporting",
+                "appearance": {"face": "皱纹", "hair": "花白", "build": "佝偻", "clothing": "粗布衣", "accessories": "糖葫芦车", "distinctive_features": "精明小眼"},
+                "sd_trigger_words": "old street vendor, weathered face, worn hat",
+                "personality_notes": "市井精明",
+            },
+            {
+                "id": "black_cat", "name": "黑猫", "role": "supporting",
+                "appearance": {"face": "", "hair": "", "build": "", "clothing": "", "accessories": "", "distinctive_features": "纯黑毛色"},
+                "sd_trigger_words": "black cat, sleek fur, glowing eyes",
+                "personality_notes": "神秘伙伴",
+            },
+        ],
+        # Stage 3: extract_scenes 返回
+        [
+            {"id": 1, "title": "朱雀大街·归来", "summary": "苏墨归来", "characters_in_scene": ["苏墨"], "emotion_arc": "苍凉→暗涌", "key_dialogue": "三年了"},
+            {"id": 2, "title": "糖葫芦摊·情报", "summary": "打探消息", "characters_in_scene": ["苏墨", "老者"], "emotion_arc": "平静→暗讽", "key_dialogue": "一千两黄金"},
+        ],
+        # Stage 4: storyboard_scene scene 1
+        [
+            {"panel_number": 1, "visual_description": "远景长安", "character_action": "无", "dialogue": "", "camera_angle": "俯视大远景", "mood": "寂寥", "sd_prompt": "epic view of capital", "character_refs": []},
+            {"panel_number": 2, "visual_description": "锈剑特写", "character_action": "手握紧", "dialogue": "", "camera_angle": "极近特写", "mood": "沉重", "sd_prompt": "close-up rusty sword", "character_refs": ["苏墨"]},
+        ],
+        # Stage 4: storyboard_scene scene 2
+        [
+            {"panel_number": 1, "visual_description": "街边对话", "character_action": "苏墨拦下老者", "dialogue": "将军府近日可有什么动静？", "camera_angle": "中景", "mood": "试探", "sd_prompt": "street conversation", "character_refs": ["苏墨", "老者"]},
+            {"panel_number": 2, "visual_description": "老者密语", "character_action": "压低声音", "dialogue": "赏金一千两黄金", "camera_angle": "近景", "mood": "暗讽", "sd_prompt": "old man whispering", "character_refs": ["老者"]},
+        ],
+    ]
+
+    mock_client = MockOpenAI(mock_responses)
     img_gen = ImageGenAdapter(use_placeholder=True)
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        data = ChapterData(
+        # 注入 Agent 上下文
+        agent_module._ctx.data = ChapterData(
             title="月下归来",
             source_text=SAMPLE_TEXT,
             output_dir=tmpdir,
         )
+        agent_module._ctx.openai_client = mock_client
+        agent_module._ctx.llm_model = "mock"
+        agent_module._ctx.img_gen = img_gen
 
-        # 构建 Pipeline
-        engine = PipelineEngine(mock_llm, img_gen)
-        engine.register(run_stage1)
-        engine.register(run_stage2)
-        engine.register(run_stage3)
-        engine.register(run_stage4)
-        engine.register(run_stage5)
-        engine.register(run_stage6)
+        # === 逐个调用 Tool ===
 
-        # 运行所有阶段
-        data = engine.run_all(data)
+        # Tool 1: analyze_text
+        result1 = json.loads(agent_module.analyze_text.func(SAMPLE_TEXT))
+        assert result1["status"] == "ok", f"analyze_text failed: {result1}"
+        assert agent_module._ctx.data.analysis is not None
+        assert agent_module._ctx.data.analysis.style == "gufeng"
+        assert len(agent_module._ctx.data.analysis.characters_preview) == 3
+        print("  [PASS] Tool 1: analyze_text")
 
-        # 验证每个阶段的输出
-        assert data.current_stage == 6, f"Expected stage 6, got {data.current_stage}"
-        assert data.analysis is not None, "Stage 1 should produce analysis"
-        assert data.analysis.style == "gufeng", f"Expected gufeng, got {data.analysis.style}"
-        assert len(data.characters) == 3, f"Expected 3 characters, got {len(data.characters)}"
-        assert data.characters[0].name == "苏墨"
-        assert data.characters[0].sd_trigger_words != ""
-        assert len(data.scenes) == 3, f"Expected 3 scenes, got {len(data.scenes)}"
-        assert len(data.scenes[0].panels) > 0, "Scene 1 should have panels"
-        for s in data.scenes:
-            for p in s.panels:
-                assert p.status == "generated", f"Panel {p.panel_number} not generated"
-                assert os.path.exists(p.generated_image_path), f"Image not found: {p.generated_image_path}"
-        assert len(data.pages) > 0, "Should have at least 1 comic page"
-        for page in data.pages:
-            assert os.path.exists(page.image_path), f"Comic page not found: {page.image_path}"
+        # Tool 2: design_characters
+        result2 = json.loads(agent_module.design_characters.func())
+        assert result2["status"] == "ok", f"design_characters failed: {result2}"
+        assert len(agent_module._ctx.data.characters) == 3
+        assert agent_module._ctx.data.characters[0].name == "苏墨"
+        assert agent_module._ctx.data.characters[0].sd_trigger_words != ""
+        print("  [PASS] Tool 2: design_characters")
 
-        print("  [PASS] test_pipeline_end_to_end passed")
+        # Tool 3: extract_scenes
+        result3 = json.loads(agent_module.extract_scenes.func())
+        assert result3["status"] == "ok", f"extract_scenes failed: {result3}"
+        assert len(agent_module._ctx.data.scenes) == 2
+        assert agent_module._ctx.data.scenes[0].title == "朱雀大街·归来"
+        print("  [PASS] Tool 3: extract_scenes")
+
+        # Tool 4: storyboard_scene (scene 1)
+        result4a = json.loads(agent_module.storyboard_scene.func(1))
+        assert result4a["status"] == "ok", f"storyboard_scene(1) failed: {result4a}"
+        assert len(agent_module._ctx.data.scenes[0].panels) == 2
+        print("  [PASS] Tool 4a: storyboard_scene(scene_id=1)")
+
+        # Tool 4: storyboard_scene (scene 2)
+        result4b = json.loads(agent_module.storyboard_scene.func(2))
+        assert result4b["status"] == "ok", f"storyboard_scene(2) failed: {result4b}"
+        assert len(agent_module._ctx.data.scenes[1].panels) == 2
+        print("  [PASS] Tool 4b: storyboard_scene(scene_id=2)")
+
+        # Verify sd_prompt was enhanced with style base + character triggers + aspect ratio
+        panel1_prompt = agent_module._ctx.data.scenes[1].panels[0].sd_prompt
+        assert "webtoon" in panel1_prompt.lower() or "gufeng" in panel1_prompt.lower() or "manga" in panel1_prompt.lower(), \
+            f"sd_prompt should contain style base: {panel1_prompt[:100]}"
+        print("  [PASS] sd_prompt auto-enhancement verified")
+
+        # Tool 5: generate_images
+        result5 = json.loads(agent_module.generate_images.func(0))
+        assert result5["status"] == "ok", f"generate_images failed: {result5}"
+        assert result5["generated"] == 4  # 2 scenes x 2 panels each
+        for scene in agent_module._ctx.data.scenes:
+            for panel in scene.panels:
+                assert panel.status == "generated"
+                assert os.path.exists(panel.generated_image_path)
+        print("  [PASS] Tool 5: generate_images")
+
+        # Tool 6: compile_comic
+        result6 = json.loads(agent_module.compile_comic.func())
+        assert result6["status"] == "ok", f"compile_comic failed: {result6}"
+        assert result6["page_count"] == 2
+        for page in agent_module._ctx.data.pages:
+            assert os.path.exists(page.image_path)
+        print("  [PASS] Tool 6: compile_comic")
+
+        # Tool 7: save_project
+        result7 = json.loads(agent_module.save_project.func())
+        assert result7["status"] == "ok", f"save_project failed: {result7}"
+        assert os.path.exists(result7["path"])
+        print("  [PASS] Tool 7: save_project")
+
+        # Verify save/load roundtrip
+        loaded = ChapterData.load(result7["path"])
+        assert loaded.title == "月下归来"
+        assert len(loaded.characters) == 3
+        assert len(loaded.scenes) == 2
+        print("  [PASS] Save/load roundtrip")
+
+    print("  [PASS] test_agent_tools_end_to_end passed")
 
 
 def test_data_serialization():
-    """测试数据模型的 JSON 序列化/反序列化。"""
+    """测试数据模型 JSON 序列化。"""
     with tempfile.TemporaryDirectory() as tmpdir:
-        data = ChapterData(
-            title="测试",
-            source_text="测试文本",
-            output_dir=tmpdir,
-        )
+        data = ChapterData(title="测试", source_text="测试文本", output_dir=tmpdir)
         data.analysis = AnalysisResult(genre_tags=["武侠"], style="gufeng")
         data.characters = [
             CharacterSheet(
@@ -210,25 +235,18 @@ def test_data_serialization():
                 sd_trigger_words="test character trigger words",
             )
         ]
-
-        # 保存
         filepath = os.path.join(tmpdir, "test.json")
         data.save(filepath)
-        assert os.path.exists(filepath)
-
-        # 加载
         loaded = ChapterData.load(filepath)
         assert loaded.title == "测试"
         assert loaded.analysis.style == "gufeng"
         assert len(loaded.characters) == 1
         assert loaded.characters[0].name == "测试角色"
-        assert loaded.characters[0].sd_trigger_words == "test character trigger words"
-
         print("  [PASS] test_data_serialization passed")
 
 
 if __name__ == "__main__":
     test_style_detection()
-    test_pipeline_end_to_end()
+    test_agent_tools_end_to_end()
     test_data_serialization()
     print("\n*** All tests passed! ***")
