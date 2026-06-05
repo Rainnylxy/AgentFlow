@@ -80,6 +80,6 @@ def run_stage2(data: ChapterData, llm: LLMAdapter, img_gen: ImageGenAdapter) -> 
             status="draft",
         )
         data.characters.append(sheet)
-        print(f"  👤 {sheet.name} [{sheet.role}] → trigger_words: {sheet.sd_trigger_words[:60]}...")
+        print(f"  [CHAR] {sheet.name} [{sheet.role}] -> trigger_words: {sheet.sd_trigger_words[:60]}...")
 
     return data

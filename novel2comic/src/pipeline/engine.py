@@ -49,7 +49,7 @@ class PipelineEngine:
         data = stage_fn(data, self.llm, self.img_gen)
         data.current_stage = stage_index + 1
 
-        print(f"  ✅ 完成")
+        print(f"  [OK] 完成")
         return data
 
     def run_all(self, data: ChapterData) -> ChapterData:

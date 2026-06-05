@@ -152,7 +152,7 @@ def _render_scroll(data: ChapterData) -> list[ComicPage]:
 
         page = ComicPage(page_number=scene.id, image_path=output_path)
         pages.append(page)
-        print(f"  📄 场景{scene.id} 排版完成 → {output_path}")
+        print(f"  [PAGE] 场景{scene.id} 排版完成 -> {output_path}")
 
     return pages
 

@@ -147,7 +147,7 @@ def main():
             data = engine.run_stage(data, data.current_stage)
             save_path = os.path.join(data.output_dir, "chapter_data.json")
             data.save(save_path)
-            print(f"  💾 已自动保存到 {save_path}")
+            print(f"  [SAVE] 已自动保存到 {save_path}")
 
         elif choice == "r":
             prev_stage = max(0, data.current_stage - 1)
@@ -168,7 +168,7 @@ def main():
             elif data.current_stage == 6:
                 data.pages = []
             data.current_stage = prev_stage
-            print(f"  ↩️  已回退到 {engine.stage_name(data.current_stage)}")
+            print(f"  [BACK] 已回退到 {engine.stage_name(data.current_stage)}")
 
         elif choice == "v":
             _show_summary(data)
@@ -176,21 +176,21 @@ def main():
         elif choice == "s":
             save_path = os.path.join(data.output_dir, "chapter_data.json")
             data.save(save_path)
-            print(f"  💾 已保存到 {save_path}")
+            print(f"  [SAVE] 已保存到 {save_path}")
 
         elif choice == "q":
             save_path = os.path.join(data.output_dir, "chapter_data.json")
             data.save(save_path)
-            print(f"  💾 已保存到 {save_path}")
-            print("  👋 再见！")
+            print(f"  [SAVE] 已保存到 {save_path}")
+            print("  [BYE] 再见！")
             break
 
     if data.current_stage >= engine.total_stages:
         print("\n" + "=" * 60)
-        print("  🎉 全部 6 阶段完成！")
+        print("  [DONE] 全部 6 阶段完成！")
         print(f"  输出目录: {data.output_dir}")
         for page in data.pages:
-            print(f"  📄 {page.image_path}")
+            print(f"  [PAGE] {page.image_path}")
         print("=" * 60)
 
 

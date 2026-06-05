@@ -33,7 +33,7 @@ def run_stage5(data: ChapterData, llm: LLMAdapter, img_gen: ImageGenAdapter) -> 
     for scene in data.scenes:
         for panel in scene.panels:
             current += 1
-            print(f"\n  🖼️  生成 [{current}/{total_panels}] 场景{scene.id} 格{panel.panel_number}")
+            print(f"\n  [IMG] 生成 [{current}/{total_panels}] 场景{scene.id} 格{panel.panel_number}")
 
             # 找该格涉及角色的参考图
             ref_path = ""
@@ -53,7 +53,7 @@ def run_stage5(data: ChapterData, llm: LLMAdapter, img_gen: ImageGenAdapter) -> 
 
             panel.generated_image_path = image_path
             panel.status = "generated"
-            print(f"    → {os.path.basename(image_path)}")
+            print(f"    -> {os.path.basename(image_path)}")
 
     print(f"\n  全部 {total_panels} 格图片生成完毕")
     return data

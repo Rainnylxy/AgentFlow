@@ -1,0 +1,82 @@
+<h2>三种架构方案对比</h2>
+<p class="subtitle">根据你的需求（多风格自动适配 + 交互式协作 + 角色一致性 + 云端生图 + 原画级输出），有三种设计思路</p>
+
+<div class="options" data-multiselect>
+  <div class="option" data-choice="pipeline" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>流水线架构 (Pipeline)</h3>
+      <p>6 个独立模块线性串联，每阶段输出结构化数据，阶段间有用户审核门</p>
+      <div class="pros-cons" style="margin-top:12px">
+        <div class="pros"><h4>Pros</h4>
+          <ul>
+            <li>模块独立，每个阶段可单独优化和替换</li>
+            <li>输出可追溯，任一环节出问题都能定位</li>
+            <li>适合团队分工（分析/分镜/生图可由不同人/模型负责）</li>
+          </ul>
+        </div>
+        <div class="cons"><h4>Cons</h4>
+          <ul>
+            <li>缺乏反馈回路——后期发现角色不一致无法回溯修正</li>
+            <li>用户交互窗口固定，灵活性不足</li>
+            <li>修改一处需要重新跑下游所有阶段</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="agent" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Agent 驱动架构</h3>
+      <p>LLM Agent 全程主导，用工具调用完成各步骤，用户通过自然语言随时介入调整</p>
+      <div class="pros-cons" style="margin-top:12px">
+        <div class="pros"><h4>Pros</h4>
+          <ul>
+            <li>极致灵活——随时可以说"第三格的镜头改仰视""这个角色眼神太凶了"</li>
+            <li>自然语言交互，学习成本低</li>
+            <li>Agent 能自我纠错，比如发现角色描述不一致自动修正</li>
+          </ul>
+        </div>
+        <div class="cons"><h4>Cons</h4>
+          <ul>
+            <li>可预测性差——同一个输入可能产出不同结果</li>
+            <li>长章节容易被上下文窗口限制</li>
+            <li>Agent 可能"走偏"——需要很强的 Prompt 约束</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="hybrid" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>混合架构 (Hybrid) ⭐ 推荐</h3>
+      <p>Pipeline 做骨架保证质量可控，Agent 做交互层实现灵活协作。结构化数据在管道中流转，用户在任意节点可介入</p>
+      <div class="pros-cons" style="margin-top:12px">
+        <div class="pros"><h4>Pros</h4>
+          <ul>
+            <li>质量可控 + 灵活交互兼得</li>
+            <li>Pipeline 阶段可独立测试和优化</li>
+            <li>Agent 层可以做跨阶段协调（如：分镜发现角色缺失 → 回溯到角色设计补全）</li>
+            <li>上下文管理好——Pipeline 阶段只传结构化摘要，不撑爆窗口</li>
+          </ul>
+        </div>
+        <div class="cons"><h4>Cons</h4>
+          <ul>
+            <li>架构复杂度最高</li>
+            <li>需要设计好 Pipeline 和 Agent 之间的接口协议</li>
+            <li>初期开发量比纯 Pipeline 多约 30%</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>核心推荐理由</h3>
+  <p>你的需求中有两个互相制约的目标：<strong>角色必须一致</strong>（需要结构化约束）和<strong>交互式协作</strong>（需要灵活调整）。纯 Pipeline 太僵硬，纯 Agent 太不稳定。混合架构用 Pipeline 保证关键质量（角色一致性、分镜格式、生图参数），用 Agent 层提供你想要的"导演式"交互体验。</p>
+</div>

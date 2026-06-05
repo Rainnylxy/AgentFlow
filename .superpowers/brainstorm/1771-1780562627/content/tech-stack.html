@@ -1,0 +1,162 @@
+<h2>设计 Section 7：技术选型与数据模型</h2>
+<p class="subtitle">最后一块拼图——用什么技术实现，数据在各阶段如何流转</p>
+
+<div class="section">
+  <h3>技术选型</h3>
+  <table style="width:100%;border-collapse:collapse;font-size:13px">
+    <tr style="border-bottom:1px solid var(--border)">
+      <th style="text-align:left;padding:10px;width:22%">模块</th>
+      <th style="text-align:left;padding:10px;width:30%">推荐方案</th>
+      <th style="text-align:left;padding:10px;width:48%">理由</th>
+    </tr>
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:10px;font-weight:600">🖥️ 运行环境</td>
+      <td style="padding:10px">Python 3.10+</td>
+      <td style="padding:10px;font-size:12px">LLM SDK、图像处理库生态最成熟</td>
+    </tr>
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:10px;font-weight:600">🧠 LLM（分析/分镜/排版）</td>
+      <td style="padding:10px">DeepSeek / Claude / GPT-4o</td>
+      <td style="padding:10px;font-size:12px">需要长上下文（整章文本）+ 结构化输出能力。通过统一 Adapter 层切换，不绑定单一模型</td>
+    </tr>
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:10px;font-weight:600">🖼️ 生图 API</td>
+      <td style="padding:10px">Stability AI / Replicate / 即梦</td>
+      <td style="padding:10px;font-size:12px">优先选支持 Reference Image 的云 API。通过 ImageGenAdapter 抽象，支持多 provider 切换</td>
+    </tr>
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:10px;font-weight:600">👤 角色一致性</td>
+      <td style="padding:10px">IP-Adapter (via Replicate) / 即梦角色参考</td>
+      <td style="padding:10px;font-size:12px">根据所选云平台的能力选用，无参考图能力的降级为纯 prompt 约束</td>
+    </tr>
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:10px;font-weight:600">🔍 一致性检测</td>
+      <td style="padding:10px">CLIP / DINOv2 嵌入 + 余弦相似度</td>
+      <td style="padding:10px;font-size:12px">轻量级，不需要 GPU，可在 CPU 上跑推理</td>
+    </tr>
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:10px;font-weight:600">🎨 排版渲染</td>
+      <td style="padding:10px">Pillow (PIL) + 自建排版引擎</td>
+      <td style="padding:10px;font-size:12px">格阵计算 + 对话框叠加 + 特效字渲染。初期够用，后期可换 ReportLab/Skia</td>
+    </tr>
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:10px;font-weight:600">💾 数据持久化</td>
+      <td style="padding:10px">JSON 文件 + 项目目录结构</td>
+      <td style="padding:10px;font-size:12px">人可读、可版本控制、无需额外数据库。项目文件即数据文件</td>
+    </tr>
+    <tr>
+      <td style="padding:10px;font-weight:600">🧠 反馈记忆</td>
+      <td style="padding:10px">JSON profile + LLM 规则提取</td>
+      <td style="padding:10px;font-size:12px">第一版不引入向量数据库，用 LLM 从反馈文本中提取结构化偏好写入 JSON</td>
+    </tr>
+  </table>
+</div>
+
+<div class="section">
+  <h3>核心数据模型</h3>
+  <div class="mockup">
+    <div class="mockup-header">数据总线上的核心实体及关系</div>
+    <div class="mockup-body" style="padding:16px;font-size:12px;font-family:monospace;line-height:1.6">
+<pre style="margin:0;white-space:pre-wrap">
+<span style="color:var(--accent)">Project</span> {
+  id, title, created_at, updated_at
+  style_profile: <span style="opacity:0.6">StyleProfile</span>      <span style="opacity:0.5">// 当前项目的风格参数</span>
+  characters: <span style="opacity:0.6">CharacterSheet[]</span>       <span style="opacity:0.5">// 角色库（跨章节共享）</span>
+  chapters: <span style="opacity:0.6">Chapter[]</span>                <span style="opacity:0.5">// 章节列表</span>
+  user_preferences: <span style="opacity:0.6">UserProfile</span>       <span style="opacity:0.5">// 用户级偏好（跨项目）</span>
+  style_memory: <span style="opacity:0.6">StyleMemory</span>           <span style="opacity:0.5">// 风格级经验积累</span>
+  snapshots: <span style="opacity:0.6">Snapshot[]</span>              <span style="opacity:0.5">// 版本历史</span>
+}
+    <span style="opacity:0.3">│</span>
+    <span style="opacity:0.3">├──</span> <span style="color:var(--accent)">Chapter</span> { id, title, source_text, word_count, status }
+    <span style="opacity:0.3">│   ├──</span> <span style="color:var(--accent)">Analysis</span> { genre_tags, style, tone, era, pace, character_previews }
+    <span style="opacity:0.3">│   ├──</span> <span style="color:var(--accent)">Scene[]</span> { id, title, summary, characters_in_scene[], emotion_arc, suggested_panels }
+    <span style="opacity:0.3">│   │   └──</span> <span style="color:var(--accent)">Panel[]</span> {
+    <span style="opacity:0.3">│   │       </span> panel_number, visual_description, character_action,
+    <span style="opacity:0.3">│   │       </span> dialogue, camera_angle, mood, sd_prompt,
+    <span style="opacity:0.3">│   │       </span> character_refs[],          <span style="opacity:0.5">// → CharacterSheet.id</span>
+    <span style="opacity:0.3">│   │       </span> generated_image: {
+    <span style="opacity:0.3">│   │           </span> url, seed, model, consistency_score, status
+    <span style="opacity:0.3">│   │       </span> }
+    <span style="opacity:0.3">│   │   }</span>
+    <span style="opacity:0.3">│   └──</span> <span style="color:var(--accent)">ComicPage[]</span> { page_number, panel_layout, bubbles[], sfx[], final_image }
+    <span style="opacity:0.3">│</span>
+    <span style="opacity:0.3">├──</span> <span style="color:var(--accent)">CharacterSheet</span> {
+    <span style="opacity:0.3">│   </span> id, name, role, status: "draft" | "locked" | "evolving"
+    <span style="opacity:0.3">│   </span> appearance: { face, hair, build, clothing, accessories, distinctive_features }
+    <span style="opacity:0.3">│   </span> reference_image: { url, seed, prompt_used, generated_at }
+    <span style="opacity:0.3">│   </span> sd_trigger_words: string         <span style="opacity:0.5">// 自动注入每格 prompt</span>
+    <span style="opacity:0.3">│   </span> revision_history: { timestamp, field, old_value, new_value, reason }[]
+    <span style="opacity:0.3">│   </span> variants: CharacterSheet[]        <span style="opacity:0.5">// 变体（受伤/变装/黑化）</span>
+    <span style="opacity:0.3">│</span> }
+    <span style="opacity:0.3">│</span>
+    <span style="opacity:0.3">├──</span> <span style="color:var(--accent)">UserProfile</span> {
+    <span style="opacity:0.3">│   </span> lens_preferences, pacing_preferences, color_preferences,
+    <span style="opacity:0.3">│   </span> bubble_style, sfx_style, do_not_list[], favorite_keywords[]
+    <span style="opacity:0.3">│</span> }
+    <span style="opacity:0.3">│</span>
+    <span style="opacity:0.3">└──</span> <span style="color:var(--accent)">StyleMemory</span> {
+        manga: { prompt_keywords, layout_tweaks, ... }
+        webtoon: { ... }
+        gufeng: { ... }
+      }
+</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>项目目录结构</h3>
+  <div style="background:var(--bg-secondary);padding:16px;border-radius:8px;font-size:13px;font-family:monospace;line-height:1.8">
+    novel2comic/                        <span style="opacity:0.5"># 项目根</span><br>
+    ├── src/<br>
+    │   ├── agent/                      <span style="opacity:0.5"># Agent 交互层</span><br>
+    │   ├── pipeline/                   <span style="opacity:0.5"># 6 阶段 Pipeline 引擎</span><br>
+    │   │   ├── stage1_analyze.py<br>
+    │   │   ├── stage2_characters.py<br>
+    │   │   ├── stage3_scenes.py<br>
+    │   │   ├── stage4_storyboard.py<br>
+    │   │   ├── stage5_image_gen.py<br>
+    │   │   └── stage6_layout.py<br>
+    │   ├── databus/                    <span style="opacity:0.5"># 数据模型 + 序列化</span><br>
+    │   ├── memory/                     <span style="opacity:0.5"># 反馈记忆系统</span><br>
+    │   ├── styles/                     <span style="opacity:0.5"># StyleProfile 定义（可扩展为 Skill）</span><br>
+    │   └── adapters/                   <span style="opacity:0.5"># LLM + ImageGen API 适配层</span><br>
+    ├── skills/                         <span style="opacity:0.5"># 风格/分镜 Skill 文件（.md）</span><br>
+    ├── projects/                       <span style="opacity:0.5"># 用户项目存储</span><br>
+    │   └── {project_name}/<br>
+    │       ├── project.json            <span style="opacity:0.5"># 项目配置 + 角色库 + 完整数据总线</span><br>
+    │       ├── user_profile.json       <span style="opacity:0.5"># 用户级偏好（跨项目共享）</span><br>
+    │       ├── snapshots/              <span style="opacity:0.5"># 阶段快照</span><br>
+    │       └── outputs/                <span style="opacity:0.5"># 生成的图片 + 漫画</span><br>
+    └── requirements.txt
+  </div>
+</div>
+
+<div class="section">
+  <h3>API 适配层设计</h3>
+  <p style="font-size:13px">所有外部依赖通过抽象的 Adapter 接口访问，方便切换 provider：</p>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+    <div style="background:var(--bg-secondary);padding:14px;border-radius:8px">
+      <div class="label">LLMAdapter</div>
+      <div style="font-size:12px;font-family:monospace;margin-top:6px;line-height:1.6">
+        .chat(prompt, schema?) → structured_output<br>
+        .analyze_text(text) → Analysis<br>
+        .generate_storyboard(scene, chars) → Panel[]
+      </div>
+      <div style="font-size:11px;opacity:0.5;margin-top:6px">实现：DeepSeekAdapter / ClaudeAdapter / GPTAdapter</div>
+    </div>
+    <div style="background:var(--bg-secondary);padding:14px;border-radius:8px">
+      <div class="label">ImageGenAdapter</div>
+      <div style="font-size:12px;font-family:monospace;margin-top:6px;line-height:1.6">
+        .generate(prompt, ref_image?, style_profile) → Image<br>
+        .generate_with_character(prompt, char_sheet) → Image
+      </div>
+      <div style="font-size:11px;opacity:0.5;margin-top:6px">实现：StabilityAdapter / ReplicateAdapter / JimengAdapter</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <p style="color:var(--text-secondary)">技术选型强调"适配层"模式——LLM 和生图 API 都通过抽象接口访问，方便后期切换。数据模型以 Project 为顶层，覆盖了从角色到分镜到用户偏好的所有实体。这是设计部分的最后一个模块，整体都 OK 吗？</p>
+</div>

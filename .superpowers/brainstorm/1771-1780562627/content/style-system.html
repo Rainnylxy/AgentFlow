@@ -1,0 +1,108 @@
+<h2>设计 Section 2：风格系统</h2>
+<p class="subtitle">根据小说文本自动判断风格，映射到对应的漫画视觉参数体系</p>
+
+<div class="section">
+  <h3>风格判断流程</h3>
+  <div class="mockup">
+    <div class="mockup-header">文本分析 → 风格分类 → 视觉参数</div>
+    <div class="mockup-body" style="padding:20px;font-family:monospace;font-size:13px;line-height:2">
+      <div style="text-align:center">
+        <span style="background:var(--accent);color:#fff;padding:8px 16px;border-radius:6px">📖 小说文本</span>
+        <span style="margin:0 12px">→</span>
+        <span style="background:var(--bg-primary);border:1px solid var(--border);padding:8px 16px;border-radius:6px">🔍 提取特征词</span>
+      </div>
+
+      <div style="margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div style="background:var(--bg-secondary);padding:14px;border-radius:8px">
+          <div class="label">分析的维度</div>
+          <ul style="margin:8px 0 0 0;padding-left:20px;font-size:13px">
+            <li><strong>题材标签：</strong>仙侠/武侠/玄幻/都市/校园/科幻/悬疑/历史/言情</li>
+            <li><strong>叙事节奏：</strong>快节奏战斗 ↔ 慢节奏对话</li>
+            <li><strong>文化背景：</strong>中国古代/日本/韩国/西方/架空</li>
+            <li><strong>语言风格：</strong>古典文言/现代白话/轻小说口语</li>
+            <li><strong>情感基调：</strong>热血/阴暗/治愈/悲壮/轻松</li>
+          </ul>
+        </div>
+        <div style="background:var(--bg-secondary);padding:14px;border-radius:8px">
+          <div class="label">风格映射规则（可扩展）</div>
+          <table style="width:100%;font-size:12px;border-collapse:collapse">
+            <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px">武侠/仙侠/玄幻</td><td style="padding:4px;font-weight:600">→ 中式古风</td></tr>
+            <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px">轻小说/校园/恋爱</td><td style="padding:4px;font-weight:600">→ Manga 日式</td></tr>
+            <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px">都市/职场/现实</td><td style="padding:4px;font-weight:600">→ Webtoon 韩式</td></tr>
+            <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px">科幻/悬疑</td><td style="padding:4px;font-weight:600">→ 根据节奏自判</td></tr>
+            <tr><td style="padding:4px">历史/古装</td><td style="padding:4px;font-weight:600">→ 中式古风</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>三种风格视觉参数体系</h3>
+  <div class="cards">
+    <div class="card" data-choice="manga" onclick="toggleSelect(this)">
+      <div class="card-body">
+        <h3>🎌 日式 Manga</h3>
+        <table style="width:100%;font-size:12px;border-collapse:collapse;margin-top:8px">
+          <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px;font-weight:600">色彩</td><td style="padding:4px">黑白为主 + 灰度网点</td></tr>
+          <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px;font-weight:600">阅读方向</td><td style="padding:4px">右翻页，从右到左、从上到下</td></tr>
+          <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px;font-weight:600">画幅</td><td style="padding:4px">B5/JIS B5，约 1.45:1</td></tr>
+          <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px;font-weight:600">特效</td><td style="padding:4px">速度线、集中线、效果字(拟声词)</td></tr>
+          <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px;font-weight:600">对话框</td><td style="padding:4px">异形气泡，形状随情绪变化</td></tr>
+          <tr><td style="padding:4px;font-weight:600">SD 关键词</td><td style="padding:4px"><code>manga style, black and white, screentone, speed lines, line art</code></td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" data-choice="webtoon" onclick="toggleSelect(this)">
+      <div class="card-body">
+        <h3>🇰🇷 韩式 Webtoon</h3>
+        <table style="width:100%;font-size:12px;border-collapse:collapse;margin-top:8px">
+          <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px;font-weight:600">色彩</td><td style="padding:4px">全彩色，柔和调色板</td></tr>
+          <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px;font-weight:600">阅读方向</td><td style="padding:4px">竖屏滑动，从上到下</td></tr>
+          <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px;font-weight:600">画幅</td><td style="padding:4px">竖版 9:16 或 1:1.6~2</td></tr>
+          <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px;font-weight:600">特效</td><td style="padding:4px">渐变背景、透明度层次、动效暗示</td></tr>
+          <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px;font-weight:600">对话框</td><td style="padding:4px">圆角矩形，简洁干净</td></tr>
+          <tr><td style="padding:4px;font-weight:600">SD 关键词</td><td style="padding:4px"><code>webtoon style, full color, soft palette, manhwa, vertical scroll</code></td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" data-choice="gufeng" onclick="toggleSelect(this)">
+      <div class="card-body">
+        <h3>🏮 中式古风</h3>
+        <table style="width:100%;font-size:12px;border-collapse:collapse;margin-top:8px">
+          <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px;font-weight:600">色彩</td><td style="padding:4px">水墨风/工笔重彩，低饱和雅致色调</td></tr>
+          <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px;font-weight:600">阅读方向</td><td style="padding:4px">灵活：条漫竖滑 or 古风册页</td></tr>
+          <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px;font-weight:600">画幅</td><td style="padding:4px">条漫 9:16 或 方形册页 1:1</td></tr>
+          <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px;font-weight:600">特效</td><td style="padding:4px">水墨渲染、留白意境、笔触质感</td></tr>
+          <tr style="border-bottom:1px solid var(--border)"><td style="padding:4px;font-weight:600">对话框</td><td style="padding:4px">竖排文字、卷轴/题跋风格</td></tr>
+          <tr><td style="padding:4px;font-weight:600">SD 关键词</td><td style="padding:4px"><code>chinese ink painting style, gufeng, watercolor wash, ancient chinese comic, elegant muted colors</code></td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>风格参数设计原则</h3>
+  <p>每种风格定义为一个 <strong>StyleProfile</strong> 对象，包含约 15-20 个可覆盖的参数。Pipeline 各阶段读取对应参数来约束输出：</p>
+  <div style="background:var(--bg-secondary);padding:16px;border-radius:8px;font-size:13px;font-family:monospace;line-height:1.8">
+    StyleProfile {<br>
+    &nbsp;&nbsp;name,          <span style="opacity:0.5">// "manga" | "webtoon" | "gufeng"</span><br>
+    &nbsp;&nbsp;colorMode,     <span style="opacity:0.5">// "bw_screentone" | "full_color" | "ink_wash"</span><br>
+    &nbsp;&nbsp;readingDirection,<span style="opacity:0.5">// "rtl_page" | "vertical_scroll" | "flexible"</span><br>
+    &nbsp;&nbsp;aspectRatio,   <span style="opacity:0.5">// "16:9" | "9:16" | "4:3" | "1:1"</span><br>
+    &nbsp;&nbsp;sdBasePrompt,  <span style="opacity:0.5">// 注入每张图的风格基座 prompt</span><br>
+    &nbsp;&nbsp;speechBubbleStyle,<span style="opacity:0.5">// 对话框渲染参数</span><br>
+    &nbsp;&nbsp;sfxStyle,      <span style="opacity:0.5">// 特效字/拟声词风格</span><br>
+    &nbsp;&nbsp;layoutRules,   <span style="opacity:0.5">// 排版引擎约束</span><br>
+    &nbsp;&nbsp;...<br>
+    }
+  </div>
+</div>
+
+<div class="section">
+  <p style="color:var(--text-secondary)">风格系统是整个管道的"调色盘"——每个阶段的输出都会受 StyleProfile 约束。这个风格参数体系你觉得够不够？还有什么需要补充的风格或参数？</p>
+</div>

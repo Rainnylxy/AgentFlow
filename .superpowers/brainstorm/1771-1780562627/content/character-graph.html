@@ -1,0 +1,149 @@
+<h2>设计扩展：人物关系知识图谱</h2>
+<p class="subtitle">从"角色列表"升级为"角色关系网"——系统理解谁爱谁、谁恨谁、谁是卧底</p>
+
+<div class="section">
+  <h3>为什么需要知识图谱？</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div style="background:var(--bg-secondary);padding:14px;border-radius:8px">
+      <div class="label" style="color:#ef4444">❌ 纯列表的问题</div>
+      <ul style="font-size:12px;margin-top:8px">
+        <li>苏墨和将军是什么关系？需要每次从原文推理</li>
+        <li>黑猫是宠物还是化身？系统不知道</li>
+        <li>两人同框时，站位远近/表情互动全凭猜</li>
+        <li>情感变化（从友变敌）无法追踪</li>
+      </ul>
+    </div>
+    <div style="background:var(--bg-secondary);padding:14px;border-radius:8px">
+      <div class="label" style="color:#22c55e">✅ 知识图谱的效果</div>
+      <ul style="font-size:12px;margin-top:8px">
+        <li>分镜时自动推断角色间距和互动模式</li>
+        <li>"仇人相见"→ 自动给特写、紧张构图</li>
+        <li>"暗恋对象出现"→ 自动加微妙眼神和氛围</li>
+        <li>跨章节追踪关系变化曲线</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>关系图谱数据模型</h3>
+  <div class="mockup">
+    <div class="mockup-header">节点 = 角色，边 = 关系，属性 = 关系细节</div>
+    <div class="mockup-body" style="padding:16px;font-size:12px;font-family:monospace;line-height:1.6">
+<pre style="margin:0;white-space:pre-wrap">
+<span style="color:var(--accent)">CharacterGraph</span> {
+  nodes: <span style="opacity:0.6">CharacterNode[]</span>         <span style="opacity:0.5">// 角色节点</span>
+  edges: <span style="opacity:0.6">RelationshipEdge[]</span>      <span style="opacity:0.5">// 关系边</span>
+  timeline: <span style="opacity:0.6">RelationEvent[]</span>       <span style="opacity:0.5">// 关系变化事件</span>
+}
+
+<span style="color:var(--accent)">CharacterNode</span> {
+  id, name, role_type,           <span style="opacity:0.5">// role_type: "protagonist" | "antagonist" | "supporting" | ...</span>
+  faction,                       <span style="opacity:0.5">// 所属势力/阵营</span>
+  importance: 1-10,              <span style="opacity:0.5">// 重要程度（影响出场频率和特写优先级）</span>
+  first_appearance_chapter,
+  status: "active" | "dead" | "missing" | "unknown",
+  character_sheet_ref            <span style="opacity:0.5">// → CharacterSheet.id</span>
+}
+
+<span style="color:var(--accent)">RelationshipEdge</span> {
+  from, to,                      <span style="opacity:0.5">// → CharacterNode.id</span>
+  relation_type,                 <span style="opacity:0.5">// "血缘" | "爱情" | "友情" | "敌对" | "师徒" | "主仆" | "利用" | ...</span>
+  sub_type,                      <span style="opacity:0.5">// "暗恋" | "杀父之仇" | "青梅竹马" | "背叛" | ...</span>
+  intimacy: -10 ~ +10,           <span style="opacity:0.5">// 亲密度：-10(不共戴天) ~ +10(生死相依)</span>
+  power_dynamic,                 <span style="opacity:0.5">// "平等" | "A主导" | "B主导" | "互相制衡"</span>
+  public_knowledge: bool,        <span style="opacity:0.5">// 这层关系是公开的还是隐藏的？</span>
+  current_tension,               <span style="opacity:0.5">// 当前张力："和谐" | "紧张" | "暧昧" | "一触即发"</span>
+  shared_history: string,        <span style="opacity:0.5">// "三年前A背叛了B"——影响互动模式</span>
+  manifested_since_chapter,      <span style="opacity:0.5">// 关系何时建立</span>
+}
+
+<span style="color:var(--accent)">RelationEvent</span> {              <span style="opacity:0.5">// 追踪关系变化</span>
+  timestamp, chapter,
+  edge: (from, to),
+  change: { field, old_value, new_value, trigger_event }
+  <span style="opacity:0.5">// 例：{ field: "intimacy", old: 5, new: -8, trigger: "A发现B是卧底" }</span>
+}
+</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>图谱如何影响分镜</h3>
+  <table style="width:100%;border-collapse:collapse;font-size:13px">
+    <tr style="border-bottom:1px solid var(--border)">
+      <th style="text-align:left;padding:8px;width:15%">关系模式</th>
+      <th style="text-align:left;padding:8px;width:42%">图谱推理</th>
+      <th style="text-align:left;padding:8px;width:43%">自动影响的分镜参数</th>
+    </tr>
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:8px;font-weight:600">intimacy ≥ +7<br>（生死相依）</td>
+      <td style="padding:8px;font-size:12px">两人关系极亲密，同框时距离近</td>
+      <td style="padding:8px;font-size:12px">→ 双人中近景、眼神交流、柔和光线<br>→ dialogue 语气温和<br>→ sd_prompt 追加 "close together, warm atmosphere"</td>
+    </tr>
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:8px;font-weight:600">intimacy ≤ -7<br>（不共戴天）</td>
+      <td style="padding:8px;font-size:12px">势不两立，同框必对峙</td>
+      <td style="padding:8px;font-size:12px">→ 斜线/对峙构图、低角度仰拍<br>→ 特写眼神交锋<br>→ sd_prompt 追加 "tense standoff, dramatic shadows"</td>
+    </tr>
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:8px;font-weight:600">power_dynamic<br>"A主导"</td>
+      <td style="padding:8px;font-size:12px">A 是关系中的上位者</td>
+      <td style="padding:8px;font-size:12px">→ A 取仰拍（显高大）、B 取俯拍（显弱小）<br>→ A 占画面更大比例</td>
+    </tr>
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:8px;font-weight:600">public_knowledge<br>= false</td>
+      <td style="padding:8px;font-size:12px">隐藏关系（卧底/暗恋/秘密同盟）</td>
+      <td style="padding:8px;font-size:12px">→ 公开场合两人站远、表情刻意<br>→ 只在对视瞬间流露真实情绪"微表情特写"<br>→ 用阴影或构图暗示隐藏关系</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;font-weight:600">current_tension<br>"暧昧"</td>
+      <td style="padding:8px;font-size:12px">感情未明朗，微妙阶段</td>
+      <td style="padding:8px;font-size:12px">→ 避免直视、多侧脸和偷看视角<br>→ 对话气泡小而靠边<br>→ sd_prompt 追加 "shy glance, cherry blossoms, soft focus"</td>
+    </tr>
+  </table>
+</div>
+
+<div class="section">
+  <h3>图谱构建与更新流程</h3>
+  <div style="background:var(--bg-secondary);padding:16px;border-radius:8px;font-size:13px;line-height:2">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center">
+      <span style="background:var(--bg-primary);padding:6px 12px;border-radius:4px;font-weight:600">📖 新章节</span>
+      <span>→</span>
+      <span style="background:var(--bg-primary);padding:6px 12px;border-radius:4px">LLM 提取人物互动</span>
+      <span>→</span>
+      <span style="background:var(--bg-primary);padding:6px 12px;border-radius:4px">匹配已有节点 / 新建节点</span>
+      <span>→</span>
+      <span style="background:var(--bg-primary);padding:6px 12px;border-radius:4px">更新/新建边（含属性）</span>
+      <span>→</span>
+      <span style="background:var(--bg-primary);padding:6px 12px;border-radius:4px">检测变化 → 写入 RelationEvent</span>
+      <span>→</span>
+      <span style="background:#22c55e;color:#fff;padding:6px 12px;border-radius:4px">🎯 你审核图谱变化</span>
+    </div>
+    <div style="margin-top:12px;text-align:center;font-size:11px;opacity:0.6">
+      每章完成后，LLM 自动提取本章中的人物关系变化 → 生成图谱更新提案 → 你确认后写入
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>存储方式</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div style="background:var(--bg-secondary);padding:14px;border-radius:8px">
+      <div class="label">第一版：JSON 内嵌</div>
+      <p style="font-size:12px;margin-top:6px">CharacterGraph 作为 project.json 的一部分，节点≤50 人物时完全够用。手工编辑也方便。</p>
+      <div style="font-size:11px;opacity:0.5;margin-top:4px">优点：简单、可 git 版本控制</div>
+    </div>
+    <div style="background:var(--bg-secondary);padding:14px;border-radius:8px">
+      <div class="label">进阶版：图数据库</div>
+      <p style="font-size:12px;margin-top:6px">Neo4j / Kuzu(嵌入式) — 人物>50 或跨小说联动时升级。支持复杂图查询（"找出所有被背叛过的角色"）。</p>
+      <div style="font-size:11px;opacity:0.5;margin-top:4px">优点：复杂查询、可视化、扩展性强</div>
+    </div>
+  </div>
+  <p style="font-size:12px;opacity:0.6;margin-top:8px">第一版用 JSON，数据模型预留好升级路径——节点和边的 schema 与图数据库兼容。</p>
+</div>
+
+<div class="section">
+  <p style="color:var(--text-secondary)">知识图谱让系统从"拍照片"升级为"讲故事"——理解角色间的爱与恨，自动调整构图、站位、眼神和气氛。你觉得这个扩展方案怎么样？</p>
+</div>

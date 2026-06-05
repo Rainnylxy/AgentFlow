@@ -41,7 +41,7 @@ from agentflow.trace.client import TraceClient
 # Config: reads from env vars, no hardcoded keys
 # ============================================================
 API_KEY = os.getenv("AGENTFLOW_API_KEY", "")
-BASE_URL = os.getenv("AGENTFLOW_BASE_URL", "https://api.deepseek.com/")
+BASE_URL = os.getenv("AGENTFLOW_BASE_URL", "https://api.deepseek.com/v1")
 MODEL = os.getenv("AGENTFLOW_MODEL", "deepseek-v4-flash")
 
 print("=" * 60)

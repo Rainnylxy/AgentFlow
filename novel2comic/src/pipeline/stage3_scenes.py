@@ -55,7 +55,7 @@ def run_stage3(data: ChapterData, llm: LLMAdapter, img_gen: ImageGenAdapter) -> 
             key_dialogue=scene_dict.get("key_dialogue", ""),
         )
         data.scenes.append(scene)
-        print(f"  🎬 场景{scene.id}: {scene.title} [{scene.emotion_arc}]")
+        print(f"  [SCENE] 场景{scene.id}: {scene.title} [{scene.emotion_arc}]")
 
     print(f"  共 {len(data.scenes)} 个场景")
     return data

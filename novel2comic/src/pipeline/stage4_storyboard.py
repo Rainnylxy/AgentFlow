@@ -70,7 +70,7 @@ def run_stage4(data: ChapterData, llm: LLMAdapter, img_gen: ImageGenAdapter) -> 
     )
 
     for scene in data.scenes:
-        print(f"\n  🎬 处理场景 {scene.id}: {scene.title}")
+        print(f"\n  [SCENE] 处理场景 {scene.id}: {scene.title}")
 
         # 找到场景原文对应的段落
         scene_chars = scene.characters_in_scene
