@@ -77,6 +77,7 @@ def detect_style(genre_tags: list[str], pace: str = "") -> StyleProfile:
                 scores["manga"] += 1
             else:
                 scores["webtoon"] += 1
+    # 同分时优先: gufeng > manga > webtoon
     best = max(scores, key=scores.get)
     if scores[best] == 0:
         return STYLE_WEBTOON

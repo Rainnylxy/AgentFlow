@@ -5,6 +5,9 @@ import os
 import io
 import uuid
 from PIL import Image, ImageDraw, ImageFont
+from openai import OpenAI
+import httpx
+import requests
 
 
 class ImageGenAdapter:
@@ -13,10 +16,14 @@ class ImageGenAdapter:
         api_key: str = "",
         base_url: str = "",
         use_placeholder: bool = False,
+        model: str = "",
+        size: str = "",
     ):
         self.api_key = api_key or os.getenv("N2C_IMG_API_KEY", "")
         self.base_url = base_url or os.getenv("N2C_IMG_BASE_URL", "")
         self.use_placeholder = use_placeholder or not self.api_key
+        self.model = model or os.getenv("N2C_IMG_MODEL", "dall-e-3")
+        self.size = size or os.getenv("N2C_IMG_SIZE", "1024x1024")
 
     def generate(
         self,
@@ -75,10 +82,13 @@ class ImageGenAdapter:
         width: int,
         height: int,
         reference_image_path: str = "",
+        model: str = "",
+        size: str = "",
     ):
-        from openai import OpenAI
-        import httpx
-        import requests as req
+        model = model or self.model
+        size = size or self.size
+        if reference_image_path:
+            print(f"Warning: reference_image_path '{reference_image_path}' is not supported by the current cloud API mode. Continuing without reference image.")
 
         proxy = os.getenv("N2C_PROXY", "")
         http_client = httpx.Client(proxy=proxy) if proxy else None
@@ -88,14 +98,14 @@ class ImageGenAdapter:
             http_client=http_client,
         )
         response = client.images.generate(
-            model="dall-e-3",
+            model=model,
             prompt=prompt,
-            size="1024x1024",
+            size=size,
             quality="standard",
             n=1,
         )
         image_url = response.data[0].url
-        img_response = req.get(image_url)
+        img_response = requests.get(image_url)
         img = Image.open(io.BytesIO(img_response.content))
         img = img.resize((width, height), Image.LANCZOS)
         img.save(filepath, "PNG")

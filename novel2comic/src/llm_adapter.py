@@ -4,6 +4,7 @@
 import os
 import json
 from openai import OpenAI
+import httpx
 
 
 class LLMAdapter:
@@ -13,13 +14,16 @@ class LLMAdapter:
         base_url: str = "",
         model: str = "deepseek-chat",
         proxy: str = "",
+        timeout: int = 120,
+        max_tokens: int = 4096,
     ):
         self.api_key = api_key or os.getenv("N2C_LLM_API_KEY", "")
         self.base_url = base_url or os.getenv("N2C_LLM_BASE_URL", "https://api.deepseek.com/v1")
         self.model = model or os.getenv("N2C_LLM_MODEL", "deepseek-chat")
         self.proxy = proxy or os.getenv("N2C_PROXY", "")
+        self.timeout = timeout
+        self.max_tokens = max_tokens
 
-        import httpx
         http_client = None
         if self.proxy:
             http_client = httpx.Client(proxy=self.proxy)
@@ -38,6 +42,8 @@ class LLMAdapter:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=temperature,
+            timeout=self.timeout,
+            max_tokens=self.max_tokens,
         )
         return response.choices[0].message.content or ""
 
@@ -57,4 +63,24 @@ class LLMAdapter:
             if lines and lines[-1].strip() == "```":
                 lines = lines[:-1]
             text = "\n".join(lines)
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            # 重试一次：截短 user_prompt 再请求
+            shorter_prompt = user_prompt[:len(user_prompt)//2]
+            text = self.chat(full_system, shorter_prompt, temperature)
+            text = text.strip()
+            if text.startswith("```"):
+                lines = text.split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                text = "\n".join(lines)
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                raise RuntimeError(
+                    f"chat_json failed to produce valid JSON after retry. "
+                    f"Original error: {e}\nResponse text: {text[:500]}"
+                )

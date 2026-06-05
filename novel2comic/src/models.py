@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Novel2Comic V2 数据模型——所有 dataclass 定义 + JSON 序列化。"""
 
+import os
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 from datetime import datetime
@@ -177,7 +178,6 @@ class ChapterData:
         return data
 
     def save(self, filepath: str):
-        import os
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
