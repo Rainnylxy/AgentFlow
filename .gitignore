@@ -20,5 +20,9 @@ Thumbs.db
 
 # Env
 .env
+
+# Novel2Comic
+novel2comic/projects/
 .venv/
 venv/
+.docs/
