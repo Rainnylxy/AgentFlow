@@ -18,6 +18,7 @@ import json
 import os
 import sys
 from datetime import datetime
+from typing import Optional
 
 # Windows 修复
 if sys.platform == "win32":
@@ -39,10 +40,11 @@ from agentflow.runtime.llm_client import OpenAIClient
 
 from src.models import (
     ChapterData, AnalysisResult, CharacterSheet, CharacterAppearance,
-    Scene, Panel, ComicPage, StyleProfile,
+    Scene, Panel, ComicPage, StyleProfile, Novel, ChapterInfo,
 )
 from src.styles import detect_style, BUILTIN_STYLES
 from src.img_adapter import ImageGenAdapter
+from src.chapter_parser import parse_novel_chapters
 
 # ============================================================
 # 共享上下文（Tool 通过此访问 LLM / ImageGen / Data）
@@ -51,10 +53,16 @@ from src.img_adapter import ImageGenAdapter
 class AgentContext:
     """Tool 共享状态——在 Agent 启动前注入。"""
     def __init__(self):
-        self.data: ChapterData | None = None
+        self.novel: Optional[Novel] = None         # 全书数据（章节列表 + 角色库）
+        self.chapter_data: Optional[ChapterData] = None  # 当前章的 Pipeline 状态
         self.openai_client = None   # openai.OpenAI 同步客户端（供 Tool 内 LLM 调用）
         self.llm_model: str = ""
-        self.img_gen: ImageGenAdapter | None = None
+        self.img_gen: Optional[ImageGenAdapter] = None
+
+    @property
+    def data(self) -> Optional[ChapterData]:
+        """快捷访问当前章数据。"""
+        return self.chapter_data
 
 _ctx = AgentContext()
 
@@ -85,7 +93,145 @@ def _llm_chat_json(system_prompt: str, user_prompt: str, temperature: float = 0.
 
 
 # ============================================================
-# 6 个 Pipeline Tool
+# Novel 级 Tool（全书管理）
+# ============================================================
+
+@tool
+def load_novel(file_path: str) -> str:
+    """加载一本小说文件，自动解析所有章节。
+
+    支持 .txt 文件。解析后自动识别第X章标记，切分为章节列表。
+    全书角色库将在跨章节生成时自动共享。
+
+    Args:
+        file_path: 小说 .txt 文件的路径
+    """
+    if not os.path.isfile(file_path):
+        return json.dumps({"error": f"文件不存在: {file_path}"})
+
+    with open(file_path, "r", encoding="utf-8") as f:
+        text = f.read()
+
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
+
+    # 解析章节
+    chapters = parse_novel_chapters(text, base_name)
+
+    # 创建 Novel
+    project_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "projects", datetime.now().strftime("%Y%m%d_%H%M%S"),
+    )
+    os.makedirs(project_dir, exist_ok=True)
+
+    _ctx.novel = Novel(
+        title=base_name,
+        file_path=file_path,
+        chapters=chapters,
+        output_dir=project_dir,
+    )
+
+    # 保存
+    novel_path = os.path.join(project_dir, "novel.json")
+    _ctx.novel.save(novel_path)
+
+    ch_list = [f"第{ch.index}章: {ch.title} ({ch.word_count}字)" for ch in chapters[:20]]
+    preview = "\n".join(ch_list)
+    if len(chapters) > 20:
+        preview += f"\n... 共 {len(chapters)} 章"
+
+    return json.dumps({
+        "status": "ok",
+        "title": base_name,
+        "total_chapters": len(chapters),
+        "chapters": ch_list,
+        "message": f"已加载《{base_name}》，共 {len(chapters)} 章。请调用 list_chapters 查看目录，然后用 select_chapter(N) 选择要生成的章节。\n\n{preview}",
+    }, ensure_ascii=False)
+
+
+@tool
+def list_chapters() -> str:
+    """列出当前小说的所有章节及其状态。"""
+    novel = _ctx.novel
+    if not novel:
+        return json.dumps({"error": "请先调用 load_novel 加载小说"})
+
+    lines = []
+    for ch in novel.chapters:
+        status_icon = "[OK]" if ch.status == "completed" else ("[*]" if ch.status == "generating" else "[ ]")
+        lines.append(f"{status_icon} 第{ch.index}章: {ch.title} ({ch.word_count}字)")
+
+    return json.dumps({
+        "status": "ok",
+        "total": novel.total_chapters,
+        "current": novel.current_chapter_index,
+        "chapter_list": lines,
+        "characters_known": [c.name for c in novel.characters],
+        "message": f"当前选中: 第{novel.current_chapter_index}章。用 select_chapter(N) 切换章节。已发现角色: {', '.join(c.name for c in novel.characters) if novel.characters else '（无）'}",
+    }, ensure_ascii=False)
+
+
+@tool
+def select_chapter(chapter_index: int) -> str:
+    """选择要生成漫画的章节。
+
+    选中后，后续的 analyze_text / design_characters 等工具将针对该章执行。
+    之前章节已设计的角色会自动复用。
+
+    Args:
+        chapter_index: 章节编号 (1-based)
+    """
+    novel = _ctx.novel
+    if not novel:
+        return json.dumps({"error": "请先调用 load_novel 加载小说"})
+
+    chapter = None
+    for ch in novel.chapters:
+        if ch.index == chapter_index:
+            chapter = ch
+            break
+
+    if not chapter:
+        return json.dumps({"error": f"第{chapter_index}章不存在。可用章节: 1-{novel.total_chapters}"})
+
+    novel.current_chapter_index = chapter_index
+    chapter.status = "generating"
+
+    # 为该章创建 ChapterData，继承全书角色库和风格
+    ch_output_dir = os.path.join(novel.output_dir, f"chapter_{chapter_index:04d}")
+    os.makedirs(ch_output_dir, exist_ok=True)
+
+    _ctx.chapter_data = ChapterData(
+        title=f"第{chapter_index}章 {chapter.title}",
+        source_text=chapter.content,
+        output_dir=ch_output_dir,
+        created_at=datetime.now().isoformat(),
+    )
+
+    # 继承全书角色库
+    _ctx.chapter_data.characters = list(novel.characters)
+
+    # 继承全书风格
+    if novel.style_profile:
+        _ctx.chapter_data.style_profile = novel.style_profile
+
+    return json.dumps({
+        "status": "ok",
+        "chapter_index": chapter_index,
+        "title": chapter.title,
+        "word_count": chapter.word_count,
+        "inherited_characters": [c.name for c in novel.characters],
+        "inherited_style": novel.style_profile.name if novel.style_profile else "auto",
+        "message": (
+            f"已选中 第{chapter_index}章《{chapter.title}》({chapter.word_count}字)。"
+            + (f" 已从前面章节继承 {len(novel.characters)} 个角色。" if novel.characters else "")
+            + " 请调用 analyze_text 开始生成。"
+        ),
+    }, ensure_ascii=False)
+
+
+# ============================================================
+# Pipeline Tool（单章生成——共 7 个）
 # ============================================================
 
 @tool
@@ -224,6 +370,11 @@ def design_characters() -> str:
         data.characters.append(sheet)
 
     names = [c.name for c in data.characters]
+
+    # 同步到全书角色库
+    if _ctx.novel:
+        _ctx.novel.add_characters(data.characters)
+
     return json.dumps({
         "status": "ok",
         "characters": names,
@@ -571,13 +722,26 @@ def compile_comic() -> str:
 @tool
 def save_project() -> str:
     """将当前项目状态保存到 JSON 文件。可在任何阶段调用。"""
-    data = _ctx.data
-    save_path = os.path.join(data.output_dir, "chapter_data.json")
-    data.save(save_path)
+    saved = []
+
+    # 保存全书数据
+    if _ctx.novel:
+        novel_path = os.path.join(_ctx.novel.output_dir, "novel.json")
+        _ctx.novel.save(novel_path)
+        saved.append(novel_path)
+
+    # 保存当前章数据
+    if _ctx.chapter_data:
+        ch_path = os.path.join(_ctx.chapter_data.output_dir, "chapter_data.json")
+        _ctx.chapter_data.save(ch_path)
+        saved.append(ch_path)
+
     return json.dumps({
         "status": "ok",
-        "path": save_path,
-        "stage": data.current_stage,
+        "saved_files": saved,
+        "novel_title": _ctx.novel.title if _ctx.novel else "",
+        "chapter": _ctx.chapter_data.title if _ctx.chapter_data else "",
+        "stage": _ctx.chapter_data.current_stage if _ctx.chapter_data else 0,
     }, ensure_ascii=False)
 
 
@@ -618,6 +782,9 @@ def build_agent():
         .with_skills_dir(os.path.join(_project_root, "skills"))
         .with_skill("novel2comic")
         .with_tools(
+            load_novel,
+            list_chapters,
+            select_chapter,
             analyze_text,
             design_characters,
             extract_scenes,
@@ -638,43 +805,24 @@ def build_agent():
 # 运行入口
 # ============================================================
 
-async def run_agent(text: str, title: str = "未命名章节"):
-    """启动 Agent 驱动的漫画生成流程。"""
+async def run_novel_agent(novel_path: str):
+    """启动 Agent：加载整本小说，让用户选择章节生成。"""
     agent = build_agent()
 
-    # 初始化数据总线
-    project_dir = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "projects",
-        datetime.now().strftime("%Y%m%d_%H%M%S"),
-    )
-    os.makedirs(project_dir, exist_ok=True)
-
-    _ctx.data = ChapterData(
-        title=title,
-        source_text=text,
-        output_dir=project_dir,
-        created_at=datetime.now().isoformat(),
-    )
-
-    # 引导指令
     task = (
-        f"## 任务：将以下小说章节转化为漫画\n\n"
-        f"章节标题：{title}\n\n"
-        f"### 小说原文\n{text}\n\n"
+        f"## 任务：加载小说并准备生成漫画\n\n"
+        f"小说文件路径：{novel_path}\n\n"
         f"### 执行计划\n"
-        f"请按顺序执行以下步骤（每步调用对应的工具）：\n"
-        f"1. 调用 analyze_text 分析文本（传入原文）\n"
-        f"2. 调用 design_characters 设计角色\n"
-        f"3. 调用 extract_scenes 拆分场景\n"
-        f"4. 对每个场景调用 storyboard_scene(scene_id=场景id) 生成分镜\n"
-        f"5. 调用 generate_images(scene_id=0) 生成全部图片\n"
-        f"6. 调用 compile_comic 排版输出\n"
-        f"7. 调用 save_project 保存项目\n\n"
-        f"每步完成后向我汇报结果。如果我对某个结果不满意，我会告诉你如何调整。"
+        f"1. 调用 load_novel('{novel_path}') 加载小说并解析所有章节\n"
+        f"2. 调用 list_chapters 查看章节列表\n"
+        f"3. 告诉我章节列表，让我选择要生成第几章\n"
+        f"4. 我选择后，调用 select_chapter(N) 选中该章\n"
+        f"5. 然后按顺序执行：analyze_text → design_characters → extract_scenes → storyboard_scene(每个场景) → generate_images → compile_comic → save_project\n\n"
+        f"每步完成后汇报结果。如果我对某个结果不满意，我会告诉你如何调整。\n"
+        f"生成完一章后，我可以叫你继续生成其他章节。"
     )
 
-    print(f"\n[Agent] 开始处理: {title}")
-    print(f"[Agent] 文本长度: {len(text)} 字符")
+    print(f"\n[Agent] 加载小说: {novel_path}")
     print(f"[Agent] 模式: REACT (Agent 自主决策工具调用)\n")
 
     result = await agent.run(task)
@@ -697,6 +845,59 @@ async def run_agent(text: str, title: str = "未命名章节"):
     return result.output
 
 
+async def run_single_chapter(text: str, title: str = "未命名章节"):
+    """启动 Agent：单章模式（兼容旧版用法）。"""
+    agent = build_agent()
+
+    project_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "projects",
+        datetime.now().strftime("%Y%m%d_%H%M%S"),
+    )
+    os.makedirs(project_dir, exist_ok=True)
+
+    _ctx.chapter_data = ChapterData(
+        title=title,
+        source_text=text,
+        output_dir=project_dir,
+        created_at=datetime.now().isoformat(),
+    )
+
+    task = (
+        f"## 任务：将以下小说章节转化为漫画\n\n"
+        f"章节标题：{title}\n\n"
+        f"### 小说原文\n{text}\n\n"
+        f"### 执行计划\n"
+        f"请按顺序执行：\n"
+        f"1. analyze_text(text=原文)\n"
+        f"2. design_characters()\n"
+        f"3. extract_scenes()\n"
+        f"4. 对每个场景调用 storyboard_scene(scene_id=N)\n"
+        f"5. generate_images(scene_id=0)\n"
+        f"6. compile_comic()\n"
+        f"7. save_project()\n\n"
+        f"每步完成后向我汇报结果。"
+    )
+
+    print(f"\n[Agent] 开始处理: {title}")
+    print(f"[Agent] 文本长度: {len(text)} 字符")
+    print(f"[Agent] 模式: REACT (Agent 自主决策工具调用)\n")
+
+    result = await agent.run(task)
+
+    print(f"\n[Agent] 处理完成, 步骤数: {len(result.steps)}")
+    for i, step in enumerate(result.steps):
+        step_type = step.get("type", step.get("phase", "?"))
+        if step_type == "tool_call":
+            for c in step.get("calls", []):
+                print(f"  步骤{i}: [TOOL] {c.get('name', '?')}")
+        else:
+            print(f"  步骤{i}: [{step_type}] {step.get('output', '')[:80]}...")
+
+    print(f"\n--- Agent 回复 ---")
+    print(result.output)
+    return result.output
+
+
 # ============================================================
 # CLI 入口
 # ============================================================
@@ -705,20 +906,30 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Novel2Comic Agent V2 - Agent 驱动的小说转漫画")
         print()
-        print("用法: python agent.py <小说文本或文件路径> [章节标题]")
+        print("用法:")
+        print("  全书模式: python agent.py --novel 小说.txt")
+        print("  单章模式: python agent.py chapter1.txt 月下初遇")
+        print('  单章模式: python agent.py "小说内容文本" 第一章')
         print()
         print("示例:")
-        print('  python agent.py "一个少年在月光下拔出了剑..." 第一章')
+        print("  python agent.py --novel 斗破苍穹.txt")
         print("  python agent.py chapter1.txt 月下初遇")
         sys.exit(1)
 
-    input_text = sys.argv[1]
-    chapter_title = sys.argv[2] if len(sys.argv) > 2 else "未命名章节"
+    if sys.argv[1] == "--novel":
+        if len(sys.argv) < 3:
+            print("[!] 请指定小说文件路径: python agent.py --novel 小说.txt")
+            sys.exit(1)
+        novel_path = sys.argv[2]
+        asyncio.run(run_novel_agent(novel_path))
+    else:
+        input_text = sys.argv[1]
+        chapter_title = sys.argv[2] if len(sys.argv) > 2 else "未命名章节"
 
-    if os.path.isfile(input_text):
-        with open(input_text, "r", encoding="utf-8") as f:
-            input_text = f.read()
-        if len(sys.argv) <= 2:
-            chapter_title = os.path.splitext(os.path.basename(sys.argv[1]))[0]
+        if os.path.isfile(input_text):
+            with open(input_text, "r", encoding="utf-8") as f:
+                input_text = f.read()
+            if len(sys.argv) <= 2:
+                chapter_title = os.path.splitext(os.path.basename(sys.argv[1]))[0]
 
-    asyncio.run(run_agent(input_text, chapter_title))
+        asyncio.run(run_single_chapter(input_text, chapter_title))

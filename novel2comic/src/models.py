@@ -132,8 +132,99 @@ class ComicPage:
 
 
 @dataclass
+class ChapterInfo:
+    """章节元数据——从小说中解析出的章节信息。"""
+    index: int = 0                  # 第几章 (1-based)
+    title: str = ""                 # 章节标题
+    content: str = ""               # 章节正文
+    word_count: int = 0             # 字数
+    status: str = "pending"         # "pending" | "generating" | "completed"
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ChapterInfo":
+        return cls(**d)
+
+
+@dataclass
+class Novel:
+    """全书——顶层数据模型，包含章节列表和跨章节共享的角色库。"""
+    title: str = ""                          # 书名
+    file_path: str = ""                      # 原始文件路径
+    chapters: list[ChapterInfo] = field(default_factory=list)  # 章节列表
+    characters: list[CharacterSheet] = field(default_factory=list)  # 全书角色库（跨章节共享）
+    style_profile: Optional[StyleProfile] = None  # 全书风格（首次分析后锁定）
+    current_chapter_index: int = 0           # 当前选中的章节 (1-based)
+    output_dir: str = ""
+
+    @property
+    def current_chapter(self) -> Optional[ChapterInfo]:
+        """当前选中的章节。"""
+        for ch in self.chapters:
+            if ch.index == self.current_chapter_index:
+                return ch
+        return None
+
+    @property
+    def total_chapters(self) -> int:
+        return len(self.chapters)
+
+    def get_characters_by_name(self, name: str) -> list[CharacterSheet]:
+        """按名称查找角色（支持模糊匹配）。"""
+        return [c for c in self.characters if c.name == name]
+
+    def has_character(self, name: str) -> bool:
+        return any(c.name == name for c in self.characters)
+
+    def add_characters(self, new_chars: list[CharacterSheet]):
+        """添加角色到全书库（同名跳过）。"""
+        existing = {c.name for c in self.characters}
+        for char in new_chars:
+            if char.name not in existing:
+                self.characters.append(char)
+                existing.add(char.name)
+
+    def to_dict(self) -> dict:
+        return {
+            "title": self.title,
+            "file_path": self.file_path,
+            "chapters": [ch.to_dict() for ch in self.chapters],
+            "characters": [c.to_dict() for c in self.characters],
+            "style_profile": self.style_profile.to_dict() if self.style_profile else None,
+            "current_chapter_index": self.current_chapter_index,
+            "output_dir": self.output_dir,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Novel":
+        novel = cls(
+            title=d.get("title", ""),
+            file_path=d.get("file_path", ""),
+            current_chapter_index=d.get("current_chapter_index", 0),
+            output_dir=d.get("output_dir", ""),
+        )
+        novel.chapters = [ChapterInfo.from_dict(ch) for ch in d.get("chapters", [])]
+        novel.characters = [CharacterSheet.from_dict(c) for c in d.get("characters", [])]
+        if d.get("style_profile"):
+            novel.style_profile = StyleProfile.from_dict(d["style_profile"])
+        return novel
+
+    def save(self, filepath: str):
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def load(cls, filepath: str) -> "Novel":
+        with open(filepath, "r", encoding="utf-8") as f:
+            return cls.from_dict(json.load(f))
+
+
+@dataclass
 class ChapterData:
-    """Pipeline 数据总线——贯穿 6 个阶段的共享状态。"""
+    """Pipeline 数据总线——单章生成的共享状态（6 阶段）。"""
     title: str = ""
     source_text: str = ""
     analysis: Optional[AnalysisResult] = None

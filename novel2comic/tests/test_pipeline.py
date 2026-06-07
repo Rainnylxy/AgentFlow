@@ -137,7 +137,7 @@ def test_agent_tools_end_to_end():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # 注入 Agent 上下文
-        agent_module._ctx.data = ChapterData(
+        agent_module._ctx.chapter_data = ChapterData(
             title="月下归来",
             source_text=SAMPLE_TEXT,
             output_dir=tmpdir,
@@ -210,11 +210,15 @@ def test_agent_tools_end_to_end():
         # Tool 7: save_project
         result7 = json.loads(agent_module.save_project.func())
         assert result7["status"] == "ok", f"save_project failed: {result7}"
-        assert os.path.exists(result7["path"])
+        saved_files = result7["saved_files"]
+        assert len(saved_files) > 0
+        for sf in saved_files:
+            assert os.path.exists(sf), f"Saved file not found: {sf}"
         print("  [PASS] Tool 7: save_project")
 
-        # Verify save/load roundtrip
-        loaded = ChapterData.load(result7["path"])
+        # Verify save/load roundtrip (chapter_data is second file)
+        ch_file = [f for f in saved_files if "chapter_data" in f][0]
+        loaded = ChapterData.load(ch_file)
         assert loaded.title == "月下归来"
         assert len(loaded.characters) == 3
         assert len(loaded.scenes) == 2
@@ -245,8 +249,151 @@ def test_data_serialization():
         print("  [PASS] test_data_serialization passed")
 
 
+# ============================================================
+# Novel-level tests
+# ============================================================
+
+NOVEL_TEXT = """第一章 星落
+
+夜幕降临，长安城华灯初上。苏墨站在朱雀大街的尽头，手握一柄锈迹斑斑的铁剑。
+
+"三年了，我终于回来了。"他低声自语。
+
+第二章 暗巷
+
+他绕过朱雀大街，钻进一条暗巷。一只黑猫从墙头跃下，落在他肩上。
+
+苏墨从怀中取出一张泛黄的羊皮纸，上面画着将军府的内部地形图。
+
+第三章 相遇
+
+清晨的阳光洒在青石板路上。一位白衣少女从巷口经过，目光与苏墨相遇。
+
+"你是..."少女迟疑地看着他手中的剑。
+"""
+
+
+def test_chapter_parser():
+    """测试章节解析器。"""
+    from src.chapter_parser import parse_novel_chapters
+    from src.models import ChapterInfo
+
+    chapters = parse_novel_chapters(NOVEL_TEXT, "测试小说")
+    assert len(chapters) == 3, f"Expected 3 chapters, got {len(chapters)}"
+
+    assert chapters[0].index == 1
+    assert chapters[0].title == "星落"
+    assert "苏墨站在朱雀大街" in chapters[0].content
+    assert "三年了" in chapters[0].content
+    assert "暗巷" not in chapters[0].content  # 不应该包含下一章内容
+
+    assert chapters[1].index == 2
+    assert chapters[1].title == "暗巷"
+    assert "黑猫从墙头跃下" in chapters[1].content
+
+    assert chapters[2].index == 3
+    assert chapters[2].title == "相遇"
+    assert "白衣少女" in chapters[2].content
+
+    print("  [PASS] test_chapter_parser passed")
+
+
+def test_novel_model():
+    """测试 Novel 数据模型。"""
+    from src.models import Novel, ChapterInfo, CharacterSheet, CharacterAppearance
+
+    novel = Novel(title="测试小说")
+    novel.chapters = [
+        ChapterInfo(index=1, title="第一章", content="测试内容", word_count=4),
+        ChapterInfo(index=2, title="第二章", content="更多内容", word_count=4),
+    ]
+
+    # 添加角色到全书库
+    char = CharacterSheet(
+        id="test", name="测试角色", role="protagonist",
+        appearance=CharacterAppearance(face="测试"),
+        sd_trigger_words="test trigger",
+    )
+    novel.add_characters([char])
+
+    assert novel.total_chapters == 2
+    assert novel.has_character("测试角色")
+    assert len(novel.characters) == 1
+
+    # 重复添加同名角色 → 跳过
+    novel.add_characters([char])
+    assert len(novel.characters) == 1
+
+    # 当前章节
+    novel.current_chapter_index = 1
+    assert novel.current_chapter is not None
+    assert novel.current_chapter.title == "第一章"
+
+    # JSON 序列化/反序列化
+    d = novel.to_dict()
+    loaded = Novel.from_dict(d)
+    assert loaded.title == "测试小说"
+    assert loaded.total_chapters == 2
+    assert len(loaded.characters) == 1
+    assert loaded.characters[0].name == "测试角色"
+
+    print("  [PASS] test_novel_model passed")
+
+
+def test_novel_agent_tools():
+    """测试 Novel 级 Agent Tools（load_novel, list_chapters, select_chapter）。"""
+    import novel2comic.agent as agent_module
+    import tempfile
+
+    # 写入临时小说文件
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(NOVEL_TEXT)
+        novel_path = f.name
+
+    try:
+        # Tool: load_novel
+        result1 = json.loads(agent_module.load_novel.func(novel_path))
+        assert result1["status"] == "ok", f"load_novel failed: {result1}"
+        assert result1["total_chapters"] == 3
+        assert agent_module._ctx.novel is not None
+        assert agent_module._ctx.novel.total_chapters == 3
+        print("  [PASS] Novel tool: load_novel")
+
+        # Tool: list_chapters
+        result2 = json.loads(agent_module.list_chapters.func())
+        assert result2["status"] == "ok"
+        assert result2["total"] == 3
+        assert len(result2["chapter_list"]) == 3
+        print("  [PASS] Novel tool: list_chapters")
+
+        # Tool: select_chapter(2)
+        result3 = json.loads(agent_module.select_chapter.func(2))
+        assert result3["status"] == "ok"
+        assert result3["chapter_index"] == 2
+        assert agent_module._ctx.novel.current_chapter_index == 2
+        assert agent_module._ctx.chapter_data is not None
+        assert "暗巷" in agent_module._ctx.chapter_data.title
+        assert "黑猫从墙头跃下" in agent_module._ctx.chapter_data.source_text
+        print("  [PASS] Novel tool: select_chapter(2)")
+
+        # select_chapter 不存在的章
+        result4 = json.loads(agent_module.select_chapter.func(99))
+        assert "error" in result4
+        print("  [PASS] Novel tool: select_chapter(99) returns error")
+
+    finally:
+        os.unlink(novel_path)
+
+    print("  [PASS] test_novel_agent_tools passed")
+
+
 if __name__ == "__main__":
     test_style_detection()
     test_agent_tools_end_to_end()
     test_data_serialization()
+    test_chapter_parser()
+    test_novel_model()
+    test_novel_agent_tools()
     print("\n*** All tests passed! ***")
