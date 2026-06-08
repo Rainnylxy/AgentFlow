@@ -1275,10 +1275,14 @@ async def run_novel_agent(novel_path: str):
         step_type = step.get("type", step.get("phase", "?"))
         if step_type == "tool_call":
             calls = step.get("calls", [])
-            for c in calls:
-                print(f"  步骤{i}: [TOOL] {c.get('name', '?')}")
+            if isinstance(calls, list):
+                for c in calls:
+                    if isinstance(c, dict):
+                        print(f"  步骤{i}: [TOOL] {c.get('name', '?')}")
+                    elif isinstance(c, str):
+                        print(f"  步骤{i}: [TOOL] {c}")
         else:
-            output_preview = step.get("output", "")[:100]
+            output_preview = str(step.get("output", ""))[:100]
             print(f"  步骤{i}: [{step_type}] {output_preview}...")
 
     print(f"\n--- Agent 回复 ---")
@@ -1331,9 +1335,12 @@ async def run_single_chapter(text: str, title: str = "未命名章节"):
         step_type = step.get("type", step.get("phase", "?"))
         if step_type == "tool_call":
             for c in step.get("calls", []):
-                print(f"  步骤{i}: [TOOL] {c.get('name', '?')}")
+                if isinstance(c, dict):
+                    print(f"  步骤{i}: [TOOL] {c.get('name', '?')}")
+                elif isinstance(c, str):
+                    print(f"  步骤{i}: [TOOL] {c}")
         else:
-            print(f"  步骤{i}: [{step_type}] {step.get('output', '')[:80]}...")
+            print(f"  步骤{i}: [{step_type}] {str(step.get('output', ''))[:80]}...")
 
     print(f"\n--- Agent 回复 ---")
     print(result.output)
