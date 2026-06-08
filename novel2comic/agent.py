@@ -78,6 +78,27 @@ class AgentContext:
 _ctx = AgentContext()
 
 
+def _read_text_file(file_path: str) -> str:
+    """读取文本文件，自动检测编码。
+
+    依次尝试: UTF-8 → UTF-16 → GBK → GB18030 → latin-1(兜底)
+    """
+    encodings = ["utf-8", "utf-16", "gbk", "gb18030", "gb2312", "latin-1"]
+    for enc in encodings:
+        try:
+            with open(file_path, "r", encoding=enc) as f:
+                text = f.read()
+            # 验证：utf-8/utf-16 读取的文本不应有明显乱码
+            if enc in ("utf-8", "utf-16") and "�" in text:
+                continue  # 有替换字符，说明编码不对
+            return text
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    # 最终兜底：errors='replace'
+    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
 def _llm_chat_json(system_prompt: str, user_prompt: str, temperature: float = 0.3) -> dict:
     """Tool 内部使用的 LLM JSON 调用。"""
     full_system = system_prompt + "\n\nYou MUST respond with valid JSON only. No markdown fences, no explanation."
@@ -151,8 +172,7 @@ def load_novel(file_path: str) -> str:
             }, ensure_ascii=False)
 
     # 2. 缓存未命中 —— 解析小说
-    with open(file_path, "r", encoding="utf-8") as f:
-        text = f.read()
+    text = _read_text_file(file_path)
 
     base_name = os.path.splitext(os.path.basename(file_path))[0]
     chapters = parse_novel_chapters(text, base_name)
@@ -1376,8 +1396,7 @@ if __name__ == "__main__":
         chapter_title = sys.argv[2] if len(sys.argv) > 2 else "未命名章节"
 
         if os.path.isfile(input_text):
-            with open(input_text, "r", encoding="utf-8") as f:
-                input_text = f.read()
+            input_text = _read_text_file(input_text)
             if len(sys.argv) <= 2:
                 chapter_title = os.path.splitext(os.path.basename(sys.argv[1]))[0]
 
