@@ -512,6 +512,137 @@ def query_character_relations(character_name: str) -> str:
 
 
 # ============================================================
+# ============================================================
+# 情节问答 Tool
+# ============================================================
+
+@tool
+def ask_plot(question: str) -> str:
+    """回答关于小说情节、角色、世界观的问题。
+
+    会搜索全书章节内容，结合知识图谱，用 LLM 生成答案。
+    可以问：角色背景、情节发展、人物关系、世界观设定等。
+
+    Args:
+        question: 关于小说的任何问题（如 "苏墨为什么回来？" "将军府的阴谋是什么？"）
+    """
+    novel = _ctx.novel
+    if not novel:
+        return json.dumps({"error": "请先 load_novel 加载小说"})
+
+    # 1. 关键词搜索相关章节
+    keywords = _extract_keywords(question)
+    relevant_chapters = _search_chapters(novel, question, keywords)
+
+    # 2. 收集知识图谱上下文
+    graph_context = ""
+    if novel.character_graph and novel.character_graph.node_count > 0:
+        # 找出问题中提到的角色
+        mentioned_chars = [n.name for n in novel.character_graph.nodes
+                           if n.name in question]
+        for char_name in mentioned_chars:
+            graph_context += f"\n[图谱] {char_name}: "
+            node = novel.character_graph.get_node(char_name)
+            if node:
+                graph_context += f"角色={node.role_type}, 阵营={node.faction}, {node.description}\n"
+            edges = novel.character_graph.get_edges(char_name)
+            for e in edges:
+                other = e.to_char if e.from_char == char_name else e.from_char
+                graph_context += f"  ←→ {other}: {e.relation_type}({e.sub_type}), 亲密度={e.intimacy:+d}, {e.shared_history}\n"
+
+    # 3. 收集相关章节摘要
+    chapter_context = ""
+    for ch in relevant_chapters[:5]:
+        snippet = ch.content[:500]
+        chapter_context += f"\n--- 第{ch.index}章《{ch.title}》---\n{snippet}\n"
+
+    if not chapter_context:
+        # 没有任何匹配章节 → 搜全部章节目录
+        chapter_context = "\n".join(
+            f"第{ch.index}章《{ch.title}》: {ch.content[:100]}..."
+            for ch in novel.chapters[:20]
+        )
+
+    # 4. 用 LLM 回答问题
+    system_prompt = (
+        "你是一位小说分析助手。根据提供的小说内容和角色关系图谱，回答用户的问题。\n"
+        "只根据给定的内容回答，不要编造。如果不确定，说'书中未提及'。\n"
+        "回答简洁，控制在 200 字以内。"
+    )
+
+    user_prompt = (
+        f"## 问题\n{question}\n\n"
+        f"## 角色关系图谱\n{graph_context}\n\n"
+        f"## 相关章节内容\n{chapter_context[:4000]}\n\n"
+        f"请回答。"
+    )
+
+    try:
+        answer = _llm_chat_json(system_prompt, user_prompt, temperature=0.3)
+        if isinstance(answer, dict):
+            answer = answer.get("answer", str(answer))
+    except Exception:
+        answer = _ctx.openai_client.chat.completions.create(
+            model=_ctx.llm_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.3, max_tokens=500,
+        ).choices[0].message.content or ""
+
+    return json.dumps({
+        "status": "ok",
+        "question": question,
+        "searched_chapters": [f"第{ch.index}章《{ch.title}》" for ch in relevant_chapters[:5]],
+        "characters_mentioned": [n.name for n in novel.character_graph.nodes if n.name in question] if novel.character_graph else [],
+        "answer": answer,
+    }, ensure_ascii=False)
+
+
+def _extract_keywords(question: str) -> list[str]:
+    """从问题中提取关键词。"""
+    import re
+    # 分词：中文按字符 n-gram，英文按空格
+    words = []
+    # 2-gram
+    for i in range(len(question) - 1):
+        bigram = question[i:i+2]
+        if not re.match(r'[\s，。？?！!的了吗呢啊]', bigram):
+            words.append(bigram)
+    # 单字
+    for ch in question:
+        if ch not in '，。？?！!的了吗呢啊是什么怎么为什么':
+            words.append(ch)
+    # 去重取前 10 个
+    seen = set()
+    result = []
+    for w in words:
+        if w not in seen:
+            seen.add(w)
+            result.append(w)
+    return result[:10]
+
+
+def _search_chapters(novel, question: str, keywords: list[str]) -> list:
+    """在章节中搜索与问题相关的内容。"""
+    scores = []
+    for ch in novel.chapters:
+        score = 0
+        content_lower = ch.content
+        title_lower = ch.title
+        for kw in keywords:
+            score += content_lower.count(kw) * 3   # 内容匹配权重
+            score += title_lower.count(kw) * 10     # 标题匹配权重
+        # 问题整体匹配
+        score += content_lower.count(question[:10]) * 20
+        if score > 0:
+            scores.append((score, ch))
+    scores.sort(key=lambda x: x[0], reverse=True)
+    return [ch for _, ch in scores]
+
+
+# ============================================================
 # Pipeline Tool（单章生成——共 7 个）
 # ============================================================
 
@@ -1117,6 +1248,7 @@ def build_agent():
             select_chapter,
             query_graph,
             query_character_relations,
+            ask_plot,
             analyze_text,
             design_characters,
             extract_scenes,
