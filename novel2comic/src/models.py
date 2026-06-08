@@ -131,6 +131,184 @@ class ComicPage:
         return cls(**d)
 
 
+# ============================================================
+# 知识图谱
+# ============================================================
+
+@dataclass
+class CharacterNode:
+    """角色节点。"""
+    id: str = ""                              # 唯一标识
+    name: str = ""                            # 中文名
+    role_type: str = ""                       # "protagonist" | "antagonist" | "supporting" | "minor"
+    faction: str = ""                         # 所属势力/阵营
+    importance: int = 5                       # 1-10 重要程度
+    first_appearance_chapter: int = 0
+    status: str = "active"                    # "active" | "dead" | "missing" | "unknown"
+    description: str = ""                     # 一句话描述
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CharacterNode":
+        return cls(**d)
+
+
+@dataclass
+class RelationshipEdge:
+    """关系边。"""
+    from_char: str = ""                       # → CharacterNode.id
+    to_char: str = ""
+    relation_type: str = ""                   # "血缘"|"爱情"|"友情"|"敌对"|"师徒"|"主仆"|"利用"|"同盟"
+    sub_type: str = ""                        # "暗恋"|"杀父之仇"|"青梅竹马"|"背叛"|...
+    intimacy: int = 0                         # -10(不共戴天) ~ +10(生死相依)
+    power_dynamic: str = "平等"               # "平等"|"A主导"|"B主导"|"互相制衡"
+    public_knowledge: bool = True             # 关系是否公开
+    current_tension: str = "和谐"             # "和谐"|"紧张"|"暧昧"|"一触即发"|"冷战"
+    shared_history: str = ""                  # 共同经历摘要
+    established_chapter: int = 0              # 关系建立的章
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RelationshipEdge":
+        return cls(**d)
+
+
+@dataclass
+class RelationEvent:
+    """关系变化事件——追踪关系随时间演变。"""
+    chapter: int = 0
+    from_char: str = ""
+    to_char: str = ""
+    field: str = ""                           # 变化的字段
+    old_value: str = ""
+    new_value: str = ""
+    trigger_event: str = ""                   # 触发事件描述
+    timestamp: str = ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RelationEvent":
+        return cls(**d)
+
+
+@dataclass
+class CharacterGraph:
+    """人物关系知识图谱。"""
+    nodes: list[CharacterNode] = field(default_factory=list)
+    edges: list[RelationshipEdge] = field(default_factory=list)
+    timeline: list[RelationEvent] = field(default_factory=list)
+    last_updated_chapter: int = 0
+
+    def get_node(self, name: str) -> Optional[CharacterNode]:
+        for n in self.nodes:
+            if n.name == name:
+                return n
+        return None
+
+    def get_or_create_node(self, name: str) -> CharacterNode:
+        node = self.get_node(name)
+        if not node:
+            node = CharacterNode(id=f"char_{len(self.nodes):03d}", name=name)
+            self.nodes.append(node)
+        return node
+
+    def get_edges(self, name: str) -> list[RelationshipEdge]:
+        return [e for e in self.edges if e.from_char == name or e.to_char == name]
+
+    def get_edge(self, a: str, b: str) -> Optional[RelationshipEdge]:
+        for e in self.edges:
+            if (e.from_char == a and e.to_char == b) or (e.from_char == b and e.to_char == a):
+                return e
+        return None
+
+    def add_edge(self, edge: RelationshipEdge):
+        existing = self.get_edge(edge.from_char, edge.to_char)
+        if existing:
+            # 更新已有边
+            for field_name in ["relation_type", "sub_type", "intimacy", "power_dynamic",
+                               "public_knowledge", "current_tension", "shared_history"]:
+                new_val = getattr(edge, field_name, None)
+                if new_val not in (None, "", 0, "平等", "和谐", True):
+                    old_val = getattr(existing, field_name)
+                    if str(old_val) != str(new_val):
+                        self.timeline.append(RelationEvent(
+                            chapter=edge.established_chapter,
+                            from_char=edge.from_char, to_char=edge.to_char,
+                            field=field_name, old_value=str(old_val),
+                            new_value=str(new_val),
+                        ))
+                    setattr(existing, field_name, new_val)
+        else:
+            self.edges.append(edge)
+
+    def get_storyboard_hints(self, char_a: str, char_b: str) -> str:
+        """根据两个角色的关系生成分镜指导提示。"""
+        edge = self.get_edge(char_a, char_b)
+        if not edge:
+            return ""
+
+        hints = []
+
+        # 亲密度 → 空间距离和氛围
+        if edge.intimacy >= 7:
+            hints.append("两人亲近，同框时距离近，用双人中近景，眼神交流，柔和光线")
+        elif edge.intimacy <= -7:
+            hints.append("两人敌对，同框时用对峙构图、低角度仰拍、特写眼神交锋、sd_prompt加'dramatic shadows'")
+
+        # 权力动态 → 镜头角度
+        if edge.power_dynamic == "A主导":
+            hints.append(f"{edge.from_char}是上位者→仰拍显高大, {edge.to_char}俯拍显弱小")
+        elif edge.power_dynamic == "B主导":
+            hints.append(f"{edge.to_char}是上位者→仰拍显高大, {edge.from_char}俯拍显弱小")
+
+        # 隐藏关系
+        if not edge.public_knowledge:
+            hints.append("关系隐藏→公开场合两人站远、表情克制、只在对视瞬间流露微表情")
+
+        # 情感张力
+        tension_map = {
+            "暧昧": "避免直视、侧脸和偷看视角、sd_prompt加'shy glance, soft focus'",
+            "紧张": "身体语言僵硬、避免眼神接触、画面留白营造窒息感",
+            "一触即发": "动作预备姿态、面部紧绷、sd_prompt加'tense atmosphere, ready to strike'",
+            "冷战": "背对背站位、各自看向不同方向、中间留空",
+        }
+        if edge.current_tension in tension_map:
+            hints.append(tension_map[edge.current_tension])
+
+        # 关系类型
+        type_hints = {
+            "爱情": "关注手部细节和微表情, sd_prompt加'romantic atmosphere'",
+            "敌对": "多用斜线构图和速度线, sd_prompt加'confrontation'",
+            "师徒": "A略高于B的站位、B带敬意的眼神",
+        }
+        if edge.relation_type in type_hints:
+            hints.append(type_hints[edge.relation_type])
+
+        return " | ".join(hints)
+
+    def to_dict(self) -> dict:
+        return {
+            "nodes": [n.to_dict() for n in self.nodes],
+            "edges": [e.to_dict() for e in self.edges],
+            "timeline": [t.to_dict() for t in self.timeline],
+            "last_updated_chapter": self.last_updated_chapter,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CharacterGraph":
+        graph = cls(last_updated_chapter=d.get("last_updated_chapter", 0))
+        graph.nodes = [CharacterNode.from_dict(n) for n in d.get("nodes", [])]
+        graph.edges = [RelationshipEdge.from_dict(e) for e in d.get("edges", [])]
+        graph.timeline = [RelationEvent.from_dict(t) for t in d.get("timeline", [])]
+        return graph
+
+
 @dataclass
 class ChapterInfo:
     """章节元数据——从小说中解析出的章节信息。"""
@@ -155,6 +333,7 @@ class Novel:
     file_path: str = ""                      # 原始文件路径
     chapters: list[ChapterInfo] = field(default_factory=list)  # 章节列表
     characters: list[CharacterSheet] = field(default_factory=list)  # 全书角色库（跨章节共享）
+    character_graph: Optional[CharacterGraph] = None  # 人物关系知识图谱
     style_profile: Optional[StyleProfile] = None  # 全书风格（首次分析后锁定）
     current_chapter_index: int = 0           # 当前选中的章节 (1-based)
     output_dir: str = ""
@@ -192,6 +371,7 @@ class Novel:
             "file_path": self.file_path,
             "chapters": [ch.to_dict() for ch in self.chapters],
             "characters": [c.to_dict() for c in self.characters],
+            "character_graph": self.character_graph.to_dict() if self.character_graph else None,
             "style_profile": self.style_profile.to_dict() if self.style_profile else None,
             "current_chapter_index": self.current_chapter_index,
             "output_dir": self.output_dir,
@@ -207,6 +387,8 @@ class Novel:
         )
         novel.chapters = [ChapterInfo.from_dict(ch) for ch in d.get("chapters", [])]
         novel.characters = [CharacterSheet.from_dict(c) for c in d.get("characters", [])]
+        if d.get("character_graph"):
+            novel.character_graph = CharacterGraph.from_dict(d["character_graph"])
         if d.get("style_profile"):
             novel.style_profile = StyleProfile.from_dict(d["style_profile"])
         return novel

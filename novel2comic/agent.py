@@ -52,6 +52,9 @@ from src.novel_registry import (
 from src.novel_rag import (
     NovelRAG, build_context_from_search, build_character_context,
 )
+from src.knowledge_graph import (
+    extract_graph_from_text, update_graph_with_chapter, graph_to_context,
+)
 
 # ============================================================
 # 共享上下文（Tool 通过此访问 LLM / ImageGen / Data）
@@ -170,6 +173,21 @@ def load_novel(file_path: str) -> str:
 
     # 持久化
     novel_path = os.path.join(project_dir, "novel.json")
+
+    # 构建初始知识图谱（用前 3 章做种子）
+    if _ctx.novel.total_chapters >= 1:
+        seed_text = "\n\n".join(
+            ch.content for ch in _ctx.novel.chapters[:3]
+        )
+        print("  [Graph] 正在提取人物关系图谱...")
+        _ctx.novel.character_graph = extract_graph_from_text(
+            seed_text, _ctx.openai_client, model=_ctx.llm_model,
+        )
+        node_count = len(_ctx.novel.character_graph.nodes)
+        edge_count = len(_ctx.novel.character_graph.edges)
+        print(f"  [Graph] 提取完成: {node_count} 个角色, {edge_count} 条关系")
+        _ctx.novel.character_graph.last_updated_chapter = min(3, _ctx.novel.total_chapters)
+
     _ctx.novel.save(novel_path)
 
     # 构建 RAG 索引
@@ -341,6 +359,16 @@ def select_chapter(chapter_index: int) -> str:
     novel.current_chapter_index = chapter_index
     chapter.status = "generating"
 
+    # 增量更新知识图谱（如果这章还没被图谱覆盖）
+    if novel.character_graph and chapter_index > novel.character_graph.last_updated_chapter:
+        print(f"  [Graph] 更新图谱至第{chapter_index}章...")
+        update_graph_with_chapter(
+            novel.character_graph, chapter.content, chapter_index,
+            _ctx.openai_client, model=_ctx.llm_model,
+        )
+        # 保存更新后的 novel
+        novel.save(os.path.join(novel.output_dir, "novel.json"))
+
     # 为该章创建 ChapterData，继承全书角色库和风格
     ch_output_dir = os.path.join(novel.output_dir, f"chapter_{chapter_index:04d}")
     os.makedirs(ch_output_dir, exist_ok=True)
@@ -474,6 +502,123 @@ def get_character_info(character_name: str) -> str:
 
 
 # ============================================================
+# 知识图谱查询 Tool
+# ============================================================
+
+@tool
+def query_graph() -> str:
+    """查看当前全书的人物关系知识图谱。
+
+    返回所有角色节点和关系边，包括亲密度、权力动态、情感张力等结构化信息。
+    图谱会在加载小说和选择章节时自动更新。
+    """
+    novel = _ctx.novel
+    if not novel or not novel.character_graph:
+        return json.dumps({"error": "知识图谱尚未构建。请先 load_novel 加载小说。"})
+
+    graph = novel.character_graph
+    context = graph_to_context(graph)
+
+    nodes_info = []
+    for n in sorted(graph.nodes, key=lambda x: -x.importance):
+        nodes_info.append({
+            "name": n.name,
+            "role": n.role_type,
+            "faction": n.faction,
+            "importance": n.importance,
+            "status": n.status,
+            "first_chapter": n.first_appearance_chapter,
+            "description": n.description,
+        })
+
+    edges_info = []
+    for e in graph.edges:
+        edges_info.append({
+            "from": e.from_char,
+            "to": e.to_char,
+            "type": e.relation_type,
+            "sub_type": e.sub_type,
+            "intimacy": e.intimacy,
+            "power": e.power_dynamic,
+            "tension": e.current_tension,
+            "public": e.public_knowledge,
+            "history": e.shared_history,
+        })
+
+    timeline_info = []
+    for t in graph.timeline[-10:]:  # 最近 10 条变化
+        timeline_info.append(
+            f"第{t.chapter}章: {t.from_char}←→{t.to_char} {t.field} {t.old_value}→{t.new_value} ({t.trigger_event})"
+        )
+
+    return json.dumps({
+        "status": "ok",
+        "node_count": len(graph.nodes),
+        "edge_count": len(graph.edges),
+        "nodes": nodes_info,
+        "edges": edges_info,
+        "recent_changes": timeline_info,
+        "context": context,
+        "message": f"图谱: {len(graph.nodes)} 个角色, {len(graph.edges)} 条关系。最近更新: 第{graph.last_updated_chapter}章。",
+    }, ensure_ascii=False)
+
+
+@tool
+def query_character_relations(character_name: str) -> str:
+    """查询指定角色在知识图谱中的所有关系。
+
+    返回该角色与其他人物的关系类型、亲密度、权力动态、情感张力，
+    以及用于分镜指导的镜头建议。
+
+    Args:
+        character_name: 角色中文名（如 "苏墨"）
+    """
+    novel = _ctx.novel
+    if not novel or not novel.character_graph:
+        return json.dumps({"error": "知识图谱尚未构建。"})
+
+    graph = novel.character_graph
+    node = graph.get_node(character_name)
+    if not node:
+        known = [n.name for n in graph.nodes]
+        return json.dumps({
+            "error": f"角色 '{character_name}' 不在图谱中。已知角色: {', '.join(known)}",
+        })
+
+    edges = graph.get_edges(character_name)
+    relations = []
+    hints = []
+    for e in edges:
+        other = e.to_char if e.from_char == character_name else e.from_char
+        relations.append({
+            "with": other,
+            "type": e.relation_type,
+            "sub_type": e.sub_type,
+            "intimacy": e.intimacy,
+            "power": e.power_dynamic,
+            "tension": e.current_tension,
+            "public": e.public_knowledge,
+            "history": e.shared_history,
+        })
+        hint = graph.get_storyboard_hints(character_name, other)
+        if hint:
+            hints.append(f"与{other}同框时: {hint}")
+
+    return json.dumps({
+        "status": "ok",
+        "character": character_name,
+        "role": node.role_type,
+        "faction": node.faction,
+        "importance": node.importance,
+        "description": node.description,
+        "relation_count": len(relations),
+        "relations": relations,
+        "storyboard_hints": hints,
+        "message": f"{character_name} [{node.role_type}] 有 {len(relations)} 条关系。",
+    }, ensure_ascii=False)
+
+
+# ============================================================
 # Pipeline Tool（单章生成——共 7 个）
 # ============================================================
 
@@ -590,20 +735,18 @@ def design_characters() -> str:
 
 重要：sd_trigger_words 必须足够详细以确保每次生图角色外貌一致。"""
 
-    # 从 RAG 中检索每个角色的全书上下文
-    rag_context = ""
-    if _ctx.rag and _ctx.rag.is_indexed:
-        for char in new_chars:
-            char_ctx = build_character_context(_ctx.rag, char["name"], max_chunks=3)
-            if char_ctx:
-                rag_context += char_ctx + "\n\n"
+    # 从知识图谱获取角色上下文
+    graph_context = ""
+    if _ctx.novel and _ctx.novel.character_graph:
+        graph_context = graph_to_context(_ctx.novel.character_graph)
 
     user_prompt = (
         f"## 人物列表\n" + "\n".join(f"- {c['name']} ({c['role']})" for c in new_chars) +
         f"\n\n## 原文片段（含外貌描写）\n{text_context}\n\n"
-        + (f"## 全书角色上下文（RAG）\n{rag_context}\n\n" if rag_context else "")
+        + (f"## 人物关系知识图谱\n{graph_context}\n\n" if graph_context else "")
         + f"## 风格\n{data.style_profile.name if data.style_profile else 'auto'}\n\n"
-        f"请为每个角色生成 Character Sheet（JSON 数组）。"
+        f"请为每个角色生成 Character Sheet（JSON 数组）。\n"
+        f"注意：如果图谱中已有角色的 faction、描述等信息，请据此丰富角色设计。"
     )
 
     result = _llm_chat_json(system_prompt, user_prompt)
@@ -755,20 +898,37 @@ def storyboard_scene(scene_id: int) -> str:
 3. 关键对话不能遗漏
 4. 相邻格之间景别/视角要有变化"""
 
-    # 从 RAG 检索场景相关上下文
-    rag_context = ""
-    if _ctx.rag and _ctx.rag.is_indexed:
-        # 用场景标题 + 关键台词作为查询
-        rag_query = f"{scene.title} {scene.summary} {scene.key_dialogue}"
-        rag_context = build_context_from_search(
-            _ctx.rag, rag_query, _ctx.openai_client, top_k=3, max_chars=1500,
-        )
+    # 从知识图谱获取分镜指导
+    graph_hints = ""
+    if _ctx.novel and _ctx.novel.character_graph:
+        # 为场景中出场的每对角色生成分镜指导
+        chars = scene.characters_in_scene
+        for i, a in enumerate(chars):
+            for b in chars[i+1:]:
+                hint = _ctx.novel.character_graph.get_storyboard_hints(a, b)
+                if hint:
+                    graph_hints += f"- {a} ←→ {b}: {hint}\n"
+        if graph_hints:
+            graph_hints = f"## 人物关系分镜指导\n{graph_hints}\n\n"
+            graph_hints += "注意：上述关系指导是基于全书的，如果你认为当前场景需要不同的情感表达，可以灵活调整。"
 
     user_prompt = (
         f"## 场景信息\n- 标题: {scene.title}\n- 摘要: {scene.summary}\n"
         f"- 情绪: {scene.emotion_arc}\n- 关键台词: {scene.key_dialogue}\n\n"
         f"## 场景原文\n{scene_text}\n\n"
-        + (f"## 全书相关上下文（RAG）\n{rag_context}\n\n" if rag_context else "")
+        + (graph_hints if graph_hints else "")
+        + (f"{graph_hints}" if graph_hints else "")
+        + f"## 角色信息\n{char_info}\n\n"
+        f"## 风格\n{data.style_profile.name if data.style_profile else 'auto'}\n\n"
+        f"请生成 3-6 格分镜脚本（JSON 数组）。"
+    )
+
+    # 去掉重复的 graph_hints（上面的拼接有问题）
+    user_prompt = (
+        f"## 场景信息\n- 标题: {scene.title}\n- 摘要: {scene.summary}\n"
+        f"- 情绪: {scene.emotion_arc}\n- 关键台词: {scene.key_dialogue}\n\n"
+        f"## 场景原文\n{scene_text}\n\n"
+        + (graph_hints if graph_hints else "")
         + f"## 角色信息\n{char_info}\n\n"
         f"## 风格\n{data.style_profile.name if data.style_profile else 'auto'}\n\n"
         f"请生成 3-6 格分镜脚本（JSON 数组）。"
@@ -1064,6 +1224,8 @@ def build_agent():
             select_chapter,
             search_novel,
             get_character_info,
+            query_graph,
+            query_character_relations,
             analyze_text,
             design_characters,
             extract_scenes,
