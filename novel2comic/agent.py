@@ -1137,49 +1137,68 @@ def build_agent():
 # 运行入口
 # ============================================================
 
-async def run_novel_agent(novel_path: str):
-    """启动 Agent：加载整本小说，让用户选择章节生成。"""
-    agent = build_agent()
+async def _chat_loop(agent, first_task: str, label: str = ""):
+    """交互式对话循环——Agent 处理任务，然后用户可以继续对话。"""
+    print(f"\n[Agent] 模式: REACT | {label}")
+    print("[Agent] 输入 'quit' 或 'exit' 退出\n")
 
-    task = (
-        f"## 任务：加载小说并准备生成漫画\n\n"
-        f"小说文件路径：{novel_path}\n\n"
-        f"### 执行计划\n"
-        f"1. 调用 load_novel('{novel_path}') 加载小说（如果已加载过会直接用缓存）\n"
-        f"2. 调用 list_chapters 查看章节列表\n"
-        f"3. 告诉我章节列表，让我选择要生成第几章\n"
-        f"4. 我选择后，调用 select_chapter(N) 选中该章\n"
-        f"5. 然后按顺序执行：analyze_text → design_characters → extract_scenes → storyboard_scene(每个场景) → generate_images → compile_comic → save_project\n\n"
-        f"每步完成后汇报结果。如果我对某个结果不满意，我会告诉你如何调整。\n"
-        f"生成完一章后，我可以叫你继续生成其他章节。\n"
-        f"如果我下次想继续，用 list_novels 查看已加载的小说，resume_novel(索引) 恢复。"
-    )
+    user_input = first_task
 
-    print(f"\n[Agent] 加载小说: {novel_path}")
-    print(f"[Agent] 模式: REACT (Agent 自主决策工具调用)\n")
+    while True:
+        result = await agent.run(user_input)
 
-    result = await agent.run(task)
+        # 打印步骤摘要
+        for i, step in enumerate(result.steps):
+            step_type = step.get("type", step.get("phase", "?"))
+            if step_type == "tool_call":
+                calls = step.get("calls", [])
+                if isinstance(calls, list):
+                    for c in calls:
+                        name = c.get("name", c) if isinstance(c, dict) else str(c)
+                        print(f"  [TOOL] {name}")
+            elif step_type in ("final", "output"):
+                output_preview = str(step.get("output", ""))[:150]
+                if output_preview:
+                    print(f"  [OUT] {output_preview}...")
 
-    print(f"\n[Agent] 处理完成")
-    print(f"[Agent] 执行步骤数: {len(result.steps)}")
-    for i, step in enumerate(result.steps):
-        step_type = step.get("type", step.get("phase", "?"))
-        if step_type == "tool_call":
-            calls = step.get("calls", [])
-            if isinstance(calls, list):
-                for c in calls:
-                    if isinstance(c, dict):
-                        print(f"  步骤{i}: [TOOL] {c.get('name', '?')}")
-                    elif isinstance(c, str):
-                        print(f"  步骤{i}: [TOOL] {c}")
-        else:
-            output_preview = str(step.get("output", ""))[:100]
-            print(f"  步骤{i}: [{step_type}] {output_preview}...")
+        print(f"\n{result.output}\n")
 
-    print(f"\n--- Agent 回复 ---")
-    print(result.output)
+        # 等待用户下一轮输入
+        try:
+            user_input = input("[You] > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n[Agent] 再见！")
+            break
+
+        if not user_input:
+            continue
+        if user_input.lower() in ("quit", "exit", "q"):
+            print("[Agent] 再见！")
+            break
 
     return result.output
+
+
+async def run_novel_agent(novel_path: str):
+    """启动 Agent：加载整本小说，进入交互对话循环。"""
+    agent = build_agent()
+
+    first_task = (
+        f'小说文件路径：{novel_path}\n\n'
+        f'请执行以下步骤：\n'
+        f"1. 调用 load_novel('{novel_path}') 加载小说\n"
+        f'2. 调用 list_chapters 查看章节列表\n'
+        f'3. 告诉我有哪些章节，等待我选择要生成第几章\n'
+        f'4. 我选择后，用 select_chapter(N) 选中，然后按顺序执行：\n'
+        f'   analyze_text -> design_characters -> extract_scenes\n'
+        f'   -> storyboard_scene(每个场景) -> generate_images\n'
+        f'   -> compile_comic -> save_project\n\n'
+        f'注意：每步完成后简短汇报，不要长篇大论。'
+        f'我说[继续第N章]你就 select_chapter(N) 然后走上述管线。'
+        f'我说哪里不满意你就调整重做对应步骤。'
+    )
+
+    await _chat_loop(agent, first_task, f"加载: {os.path.basename(novel_path)}")
 
 
 async def run_single_chapter(text: str, title: str = "未命名章节"):
@@ -1199,43 +1218,21 @@ async def run_single_chapter(text: str, title: str = "未命名章节"):
         created_at=datetime.now().isoformat(),
     )
 
-    task = (
-        f"## 任务：将以下小说章节转化为漫画\n\n"
-        f"章节标题：{title}\n\n"
-        f"### 小说原文\n{text}\n\n"
-        f"### 执行计划\n"
-        f"请按顺序执行：\n"
-        f"1. analyze_text(text=原文)\n"
-        f"2. design_characters()\n"
-        f"3. extract_scenes()\n"
-        f"4. 对每个场景调用 storyboard_scene(scene_id=N)\n"
-        f"5. generate_images(scene_id=0)\n"
-        f"6. compile_comic()\n"
-        f"7. save_project()\n\n"
-        f"每步完成后向我汇报结果。"
+    first_task = (
+        f'章节标题：{title}\n\n'
+        f'### 小说原文\n{text[:3000]}\n\n'
+        f'请按顺序执行：\n'
+        f'1. analyze_text(text=原文)\n'
+        f'2. design_characters()\n'
+        f'3. extract_scenes()\n'
+        f'4. 对每个场景调用 storyboard_scene(scene_id=N)\n'
+        f'5. generate_images(scene_id=0)\n'
+        f'6. compile_comic()\n'
+        f'7. save_project()\n\n'
+        f'每步完成后简短汇报。我说哪里不满意你就调整。'
     )
 
-    print(f"\n[Agent] 开始处理: {title}")
-    print(f"[Agent] 文本长度: {len(text)} 字符")
-    print(f"[Agent] 模式: REACT (Agent 自主决策工具调用)\n")
-
-    result = await agent.run(task)
-
-    print(f"\n[Agent] 处理完成, 步骤数: {len(result.steps)}")
-    for i, step in enumerate(result.steps):
-        step_type = step.get("type", step.get("phase", "?"))
-        if step_type == "tool_call":
-            for c in step.get("calls", []):
-                if isinstance(c, dict):
-                    print(f"  步骤{i}: [TOOL] {c.get('name', '?')}")
-                elif isinstance(c, str):
-                    print(f"  步骤{i}: [TOOL] {c}")
-        else:
-            print(f"  步骤{i}: [{step_type}] {str(step.get('output', ''))[:80]}...")
-
-    print(f"\n--- Agent 回复 ---")
-    print(result.output)
-    return result.output
+    await _chat_loop(agent, first_task, f'单章: {title}')
 
 
 # ============================================================
