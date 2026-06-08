@@ -523,6 +523,91 @@ def test_load_novel_cache_hit():
     print("  [PASS] test_load_novel_cache_hit passed")
 
 
+def test_graph_algorithms():
+    """测试 NetworkX 图算法。"""
+    from src.models import CharacterGraph, RelationshipEdge, CharacterNode
+
+    graph = CharacterGraph()
+
+    # 添加角色
+    for name, faction, importance in [
+        ("苏墨", "江湖", 10), ("将军", "将军府", 8),
+        ("黑猫", "江湖", 6), ("白衣少女", "无", 7),
+        ("老管家", "将军府", 4),
+    ]:
+        node = CharacterNode(id=f"n_{name}", name=name, faction=faction, importance=importance)
+        graph._add_node(node)
+
+    # 添加关系
+    relations = [
+        ("苏墨", "将军", "敌对", -8, "A主导"),
+        ("苏墨", "黑猫", "主仆", 8, "平等"),
+        ("苏墨", "白衣少女", "爱情", 5, "平等"),
+        ("将军", "老管家", "主仆", 3, "A主导"),
+        ("白衣少女", "将军", "血缘", -2, "B主导"),
+    ]
+    for a, b, rtype, intimacy, power in relations:
+        graph.add_edge(RelationshipEdge(
+            from_char=a, to_char=b, relation_type=rtype,
+            intimacy=intimacy, power_dynamic=power,
+        ))
+
+    # 测试 1: 节点数
+    assert graph.node_count == 5
+    assert graph.edge_count == 5
+    print("  [PASS] graph: node/edge count")
+
+    # 测试 2: 最短路径
+    path = graph.shortest_path("老管家", "黑猫")
+    assert path is not None
+    # 老管家 → 将军 → 苏墨 → 黑猫
+    assert len(path) == 4
+    print(f"  [PASS] graph: shortest_path(老管家, 黑猫) = {' → '.join(path)}")
+
+    # 测试 3: 中心度排名
+    centrality = graph.centrality_ranking()
+    assert centrality[0][0] == "苏墨"  # 苏墨连接最多人
+    print(f"  [PASS] graph: centrality top = {centrality[0]}")
+
+    # 测试 4: 阵营分组
+    factions = graph.faction_groups()
+    assert "江湖" in factions
+    assert "将军府" in factions
+    print(f"  [PASS] graph: factions = {list(factions.keys())}")
+
+    # 测试 5: 敌对关系
+    enemies = graph.enemy_pairs()
+    assert ("苏墨", "将军") in enemies or ("将军", "苏墨") in enemies
+    print(f"  [PASS] graph: enemy_pairs = {enemies}")
+
+    # 测试 6: 关系子图
+    story = graph.story_path("苏墨", max_depth=1)
+    assert "将军" in story
+    assert "黑猫" in story
+    assert "白衣少女" in story
+    print(f"  [PASS] graph: story_path(苏墨) has {len(story)} direct connections")
+
+    # 测试 7: 亲密度排名
+    intimacy_rank = graph.intimacy_ranking()
+    assert abs(intimacy_rank[0][2]) >= abs(intimacy_rank[-1][2])
+    print(f"  [PASS] graph: intimacy top = {intimacy_rank[0]}")
+
+    # 测试 8: JSON 序列化往返
+    d = graph.to_dict()
+    loaded = CharacterGraph.from_dict(d)
+    assert loaded.node_count == 5
+    assert loaded.edge_count == 5
+    assert loaded.get_edge("苏墨", "将军").intimacy == -8
+    print("  [PASS] graph: to_dict/from_dict roundtrip")
+
+    # 测试 9: 分镜指导
+    hint = graph.get_storyboard_hints("苏墨", "将军")
+    assert "对峙" in hint
+    print(f"  [PASS] graph: storyboard_hints(苏墨, 将军) = {hint}")
+
+    print("  [PASS] test_graph_algorithms passed")
+
+
 if __name__ == "__main__":
     test_style_detection()
     test_agent_tools_end_to_end()
@@ -532,4 +617,5 @@ if __name__ == "__main__":
     test_novel_agent_tools()
     test_novel_registry()
     test_load_novel_cache_hit()
+    test_graph_algorithms()
     print("\n*** All tests passed! ***")

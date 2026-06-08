@@ -199,42 +199,101 @@ class RelationEvent:
 
 @dataclass
 class CharacterGraph:
-    """人物关系知识图谱。"""
-    nodes: list[CharacterNode] = field(default_factory=list)
-    edges: list[RelationshipEdge] = field(default_factory=list)
-    timeline: list[RelationEvent] = field(default_factory=list)
+    """人物关系知识图谱——基于 NetworkX。
+
+    内部使用 networkx.Graph 存储节点和边，
+    对外保持兼容的 API，同时暴露图算法（最短路径、中心度等）。
+    """
     last_updated_chapter: int = 0
+    timeline: list[RelationEvent] = field(default_factory=list)
+
+    def __post_init__(self):
+        import networkx as nx
+        self._g = nx.Graph()
+
+    # ================================================================
+    # 节点操作
+    # ================================================================
 
     def get_node(self, name: str) -> Optional[CharacterNode]:
-        for n in self.nodes:
-            if n.name == name:
-                return n
-        return None
+        if name not in self._g:
+            return None
+        attrs = self._g.nodes[name]
+        return CharacterNode(
+            id=attrs.get("id", ""), name=name,
+            role_type=attrs.get("role_type", ""),
+            faction=attrs.get("faction", ""),
+            importance=attrs.get("importance", 5),
+            first_appearance_chapter=attrs.get("first_appearance_chapter", 0),
+            status=attrs.get("status", "active"),
+            description=attrs.get("description", ""),
+        )
 
     def get_or_create_node(self, name: str) -> CharacterNode:
         node = self.get_node(name)
         if not node:
-            node = CharacterNode(id=f"char_{len(self.nodes):03d}", name=name)
-            self.nodes.append(node)
+            node = CharacterNode(id=f"char_{len(self._g):03d}", name=name)
+            self._add_node(node)
         return node
 
+    def _add_node(self, node: CharacterNode):
+        self._g.add_node(node.name,
+            id=node.id, role_type=node.role_type, faction=node.faction,
+            importance=node.importance, first_appearance_chapter=node.first_appearance_chapter,
+            status=node.status, description=node.description,
+        )
+
+    @property
+    def nodes(self) -> list[CharacterNode]:
+        return [self.get_node(n) for n in self._g.nodes]
+
+    @property
+    def node_count(self) -> int:
+        return self._g.number_of_nodes()
+
+    # ================================================================
+    # 边操作
+    # ================================================================
+
     def get_edges(self, name: str) -> list[RelationshipEdge]:
-        return [e for e in self.edges if e.from_char == name or e.to_char == name]
+        edges = []
+        for neighbor in self._g.neighbors(name):
+            edge = self.get_edge(name, neighbor)
+            if edge:
+                edges.append(edge)
+        return edges
 
     def get_edge(self, a: str, b: str) -> Optional[RelationshipEdge]:
-        for e in self.edges:
-            if (e.from_char == a and e.to_char == b) or (e.from_char == b and e.to_char == a):
-                return e
-        return None
+        if not self._g.has_edge(a, b):
+            return None
+        data = self._g.edges[a, b]
+        return RelationshipEdge(
+            from_char=a, to_char=b,
+            relation_type=data.get("relation_type", ""),
+            sub_type=data.get("sub_type", ""),
+            intimacy=data.get("intimacy", 0),
+            power_dynamic=data.get("power_dynamic", "平等"),
+            public_knowledge=data.get("public_knowledge", True),
+            current_tension=data.get("current_tension", "和谐"),
+            shared_history=data.get("shared_history", ""),
+            established_chapter=data.get("established_chapter", 0),
+        )
 
     def add_edge(self, edge: RelationshipEdge):
+        # 确保两端节点存在
+        if edge.from_char not in self._g:
+            self._g.add_node(edge.from_char)
+        if edge.to_char not in self._g:
+            self._g.add_node(edge.to_char)
+
         existing = self.get_edge(edge.from_char, edge.to_char)
         if existing:
-            # 更新已有边
             for field_name in ["relation_type", "sub_type", "intimacy", "power_dynamic",
                                "public_knowledge", "current_tension", "shared_history"]:
                 new_val = getattr(edge, field_name, None)
-                if new_val not in (None, "", 0, "平等", "和谐", True):
+                default_map = {"intimacy": 0, "power_dynamic": "平等", "current_tension": "和谐", "public_knowledge": True}
+                default = default_map.get(field_name)
+                if new_val not in (None, "", default):
                     old_val = getattr(existing, field_name)
                     if str(old_val) != str(new_val):
                         self.timeline.append(RelationEvent(
@@ -243,9 +302,90 @@ class CharacterGraph:
                             field=field_name, old_value=str(old_val),
                             new_value=str(new_val),
                         ))
-                    setattr(existing, field_name, new_val)
-        else:
-            self.edges.append(edge)
+            # 直接覆盖所有属性
+        self._g.add_edge(edge.from_char, edge.to_char,
+            relation_type=edge.relation_type, sub_type=edge.sub_type,
+            intimacy=edge.intimacy, power_dynamic=edge.power_dynamic,
+            public_knowledge=edge.public_knowledge, current_tension=edge.current_tension,
+            shared_history=edge.shared_history, established_chapter=edge.established_chapter,
+        )
+
+    @property
+    def edges(self) -> list[RelationshipEdge]:
+        result = []
+        for a, b in self._g.edges:
+            edge = self.get_edge(a, b)
+            if edge:
+                result.append(edge)
+        return result
+
+    @property
+    def edge_count(self) -> int:
+        return self._g.number_of_edges()
+
+    # ================================================================
+    # 图算法（NetworkX 提供）
+    # ================================================================
+
+    def shortest_path(self, a: str, b: str) -> Optional[list[str]]:
+        """两角色之间的最短关系路径。"""
+        import networkx as nx
+        try:
+            return nx.shortest_path(self._g, a, b)
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            return None
+
+    def centrality_ranking(self, top_k: int = 10) -> list[tuple[str, float]]:
+        """角色中心度排名（度中心性）。"""
+        import networkx as nx
+        dc = nx.degree_centrality(self._g)
+        return sorted(dc.items(), key=lambda x: x[1], reverse=True)[:top_k]
+
+    def faction_groups(self) -> dict[str, list[str]]:
+        """按阵营分组角色。"""
+        groups: dict[str, list[str]] = {}
+        for node in self.nodes:
+            faction = node.faction or "无阵营"
+            if faction not in groups:
+                groups[faction] = []
+            groups[faction].append(node.name)
+        return groups
+
+    def enemy_pairs(self) -> list[tuple[str, str]]:
+        """列出所有敌对关系。"""
+        return [(a, b) for a, b, d in self._g.edges(data=True)
+                if d.get("relation_type") == "敌对"]
+
+    def hidden_relations(self) -> list[tuple[str, str, str]]:
+        """列出所有隐藏关系。"""
+        return [(a, b, d.get("relation_type", ""))
+                for a, b, d in self._g.edges(data=True)
+                if not d.get("public_knowledge", True)]
+
+    def intimacy_ranking(self) -> list[tuple[str, str, int]]:
+        """按亲密度排序的关系列表。"""
+        pairs = [(a, b, d.get("intimacy", 0)) for a, b, d in self._g.edges(data=True)]
+        return sorted(pairs, key=lambda x: abs(x[2]), reverse=True)
+
+    def story_path(self, char: str, max_depth: int = 2) -> dict:
+        """角色的关系子图（用于故事线查看）。"""
+        import networkx as nx
+        neighbors = {}
+        for depth in range(1, max_depth + 1):
+            for other in self._g.nodes:
+                if other == char:
+                    continue
+                try:
+                    path = nx.shortest_path(self._g, char, other)
+                    if len(path) - 1 == depth:
+                        neighbors[other] = path
+                except (nx.NetworkXNoPath, nx.NodeNotFound):
+                    continue
+        return neighbors
+
+    # ================================================================
+    # 分镜指导
+    # ================================================================
 
     def get_storyboard_hints(self, char_a: str, char_b: str) -> str:
         """根据两个角色的关系生成分镜指导提示。"""
@@ -254,24 +394,19 @@ class CharacterGraph:
             return ""
 
         hints = []
-
-        # 亲密度 → 空间距离和氛围
         if edge.intimacy >= 7:
             hints.append("两人亲近，同框时距离近，用双人中近景，眼神交流，柔和光线")
         elif edge.intimacy <= -7:
             hints.append("两人敌对，同框时用对峙构图、低角度仰拍、特写眼神交锋、sd_prompt加'dramatic shadows'")
 
-        # 权力动态 → 镜头角度
         if edge.power_dynamic == "A主导":
             hints.append(f"{edge.from_char}是上位者→仰拍显高大, {edge.to_char}俯拍显弱小")
         elif edge.power_dynamic == "B主导":
             hints.append(f"{edge.to_char}是上位者→仰拍显高大, {edge.from_char}俯拍显弱小")
 
-        # 隐藏关系
         if not edge.public_knowledge:
             hints.append("关系隐藏→公开场合两人站远、表情克制、只在对视瞬间流露微表情")
 
-        # 情感张力
         tension_map = {
             "暧昧": "避免直视、侧脸和偷看视角、sd_prompt加'shy glance, soft focus'",
             "紧张": "身体语言僵硬、避免眼神接触、画面留白营造窒息感",
@@ -281,7 +416,6 @@ class CharacterGraph:
         if edge.current_tension in tension_map:
             hints.append(tension_map[edge.current_tension])
 
-        # 关系类型
         type_hints = {
             "爱情": "关注手部细节和微表情, sd_prompt加'romantic atmosphere'",
             "敌对": "多用斜线构图和速度线, sd_prompt加'confrontation'",
@@ -291,6 +425,10 @@ class CharacterGraph:
             hints.append(type_hints[edge.relation_type])
 
         return " | ".join(hints)
+
+    # ================================================================
+    # 序列化
+    # ================================================================
 
     def to_dict(self) -> dict:
         return {
@@ -303,8 +441,14 @@ class CharacterGraph:
     @classmethod
     def from_dict(cls, d: dict) -> "CharacterGraph":
         graph = cls(last_updated_chapter=d.get("last_updated_chapter", 0))
-        graph.nodes = [CharacterNode.from_dict(n) for n in d.get("nodes", [])]
-        graph.edges = [RelationshipEdge.from_dict(e) for e in d.get("edges", [])]
+        for nd in d.get("nodes", []):
+            node = CharacterNode.from_dict(nd)
+            graph._add_node(node)
+        for ed in d.get("edges", []):
+            edge = RelationshipEdge.from_dict(ed)
+            graph._g.add_node(edge.from_char)
+            graph._g.add_node(edge.to_char)
+            graph.add_edge(edge)
         graph.timeline = [RelationEvent.from_dict(t) for t in d.get("timeline", [])]
         return graph
 
