@@ -184,19 +184,29 @@ def load_novel(file_path: str) -> str:
     # 持久化
     novel_path = os.path.join(project_dir, "novel.json")
 
-    # 构建初始知识图谱（用前 3 章做种子）
+    # 构建初始知识图谱
     if _ctx.novel.total_chapters >= 1:
-        seed_text = "\n\n".join(
-            ch.content for ch in _ctx.novel.chapters[:3]
-        )
-        print("  [Graph] 正在提取人物关系图谱...")
+        print("  [Graph] 正在从全书提取人物关系图谱...")
+
+        # 采样策略：取每章开头 1000 字 + 均匀采样保证覆盖面
+        total = _ctx.novel.total_chapters
+        sample_count = min(total, 10)  # 最多采样 10 章
+        step = max(1, total // sample_count)
+        sampled_indices = list(range(0, total, step))[:sample_count]
+
+        seed_text_parts = []
+        for idx in sampled_indices:
+            ch = _ctx.novel.chapters[idx]
+            seed_text_parts.append(f"第{ch.index}章 {ch.title}\n{ch.content[:1000]}")
+        seed_text = "\n\n".join(seed_text_parts)
+
         _ctx.novel.character_graph = extract_graph_from_text(
             seed_text, _ctx.openai_client, model=_ctx.llm_model,
         )
         node_count = len(_ctx.novel.character_graph.nodes)
         edge_count = len(_ctx.novel.character_graph.edges)
-        print(f"  [Graph] 提取完成: {node_count} 个角色, {edge_count} 条关系")
-        _ctx.novel.character_graph.last_updated_chapter = min(3, _ctx.novel.total_chapters)
+        _ctx.novel.character_graph.last_updated_chapter = total
+        print(f"  [Graph] 提取完成: {node_count} 个角色, {edge_count} 条关系 (采样 {len(sampled_indices)}/{total} 章)")
 
     _ctx.novel.save(novel_path)
 
@@ -350,16 +360,6 @@ def select_chapter(chapter_index: int) -> str:
 
     novel.current_chapter_index = chapter_index
     chapter.status = "generating"
-
-    # 增量更新知识图谱（如果这章还没被图谱覆盖）
-    if novel.character_graph and chapter_index > novel.character_graph.last_updated_chapter:
-        print(f"  [Graph] 更新图谱至第{chapter_index}章...")
-        update_graph_with_chapter(
-            novel.character_graph, chapter.content, chapter_index,
-            _ctx.openai_client, model=_ctx.llm_model,
-        )
-        # 保存更新后的 novel
-        novel.save(os.path.join(novel.output_dir, "novel.json"))
 
     # 为该章创建 ChapterData，继承全书角色库和风格
     ch_output_dir = os.path.join(novel.output_dir, f"chapter_{chapter_index:04d}")
