@@ -45,6 +45,10 @@ from src.models import (
 from src.styles import detect_style, BUILTIN_STYLES
 from src.img_adapter import ImageGenAdapter
 from src.chapter_parser import parse_novel_chapters
+from src.novel_registry import (
+    register_novel, find_novel, list_all_novels,
+    update_novel_access, update_novel_style, update_novel_chapters,
+)
 
 # ============================================================
 # 共享上下文（Tool 通过此访问 LLM / ImageGen / Data）
@@ -98,10 +102,10 @@ def _llm_chat_json(system_prompt: str, user_prompt: str, temperature: float = 0.
 
 @tool
 def load_novel(file_path: str) -> str:
-    """加载一本小说文件，自动解析所有章节。
+    """加载一本小说文件。
 
-    支持 .txt 文件。解析后自动识别第X章标记，切分为章节列表。
-    全书角色库将在跨章节生成时自动共享。
+    首次加载时解析章节并缓存。再次加载同一文件时直接从缓存恢复，
+    无需重新解析。支持 .txt 格式。
 
     Args:
         file_path: 小说 .txt 文件的路径
@@ -109,15 +113,38 @@ def load_novel(file_path: str) -> str:
     if not os.path.isfile(file_path):
         return json.dumps({"error": f"文件不存在: {file_path}"})
 
+    # 1. 检查注册表 —— 是否已解析过
+    cached = find_novel(file_path)
+    if cached:
+        # 缓存命中！直接从 novel.json 恢复
+        novel_json_path = os.path.join(cached.project_dir, "novel.json")
+        if os.path.exists(novel_json_path):
+            _ctx.novel = Novel.load(novel_json_path)
+            _ctx.novel.output_dir = cached.project_dir
+            update_novel_access(file_path)
+
+            return json.dumps({
+                "status": "ok",
+                "cached": True,
+                "title": cached.title,
+                "total_chapters": cached.total_chapters,
+                "style": cached.style,
+                "project_dir": cached.project_dir,
+                "message": (
+                    f"[缓存命中]《{cached.title}》已恢复，共 {cached.total_chapters} 章。"
+                    + (f" 全书风格: {cached.style}。" if cached.style else "")
+                    + f" 请调用 list_chapters 查看目录，select_chapter(N) 选择章节。"
+                ),
+            }, ensure_ascii=False)
+
+    # 2. 缓存未命中 —— 解析小说
     with open(file_path, "r", encoding="utf-8") as f:
         text = f.read()
 
     base_name = os.path.splitext(os.path.basename(file_path))[0]
-
-    # 解析章节
     chapters = parse_novel_chapters(text, base_name)
 
-    # 创建 Novel
+    # 创建项目目录
     project_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "projects", datetime.now().strftime("%Y%m%d_%H%M%S"),
@@ -131,9 +158,12 @@ def load_novel(file_path: str) -> str:
         output_dir=project_dir,
     )
 
-    # 保存
+    # 持久化
     novel_path = os.path.join(project_dir, "novel.json")
     _ctx.novel.save(novel_path)
+
+    # 注册到注册表
+    register_novel(file_path, base_name, len(chapters), project_dir)
 
     ch_list = [f"第{ch.index}章: {ch.title} ({ch.word_count}字)" for ch in chapters[:20]]
     preview = "\n".join(ch_list)
@@ -142,10 +172,96 @@ def load_novel(file_path: str) -> str:
 
     return json.dumps({
         "status": "ok",
+        "cached": False,
         "title": base_name,
         "total_chapters": len(chapters),
         "chapters": ch_list,
-        "message": f"已加载《{base_name}》，共 {len(chapters)} 章。请调用 list_chapters 查看目录，然后用 select_chapter(N) 选择要生成的章节。\n\n{preview}",
+        "message": f"[首次解析]《{base_name}》已加载并缓存，共 {len(chapters)} 章。下次访问将直接恢复。请调用 list_chapters 查看目录，select_chapter(N) 选择章节。\n\n{preview}",
+    }, ensure_ascii=False)
+
+
+@tool
+def list_novels() -> str:
+    """列出所有已加载过的小说（支持从注册表恢复）。
+
+    显示每本小说的标题、章节数、风格和最后访问时间。
+    无需先调用 load_novel。
+    """
+    entries = list_all_novels()
+
+    if not entries:
+        return json.dumps({
+            "status": "ok",
+            "novels": [],
+            "message": "还没有加载过任何小说。请用 load_novel(文件路径) 加载一本。",
+        }, ensure_ascii=False)
+
+    novel_list = []
+    for e in entries:
+        novel_list.append(
+            f"《{e.title}》({e.total_chapters}章) | 风格: {e.style or '未设置'} | 最后访问: {e.last_accessed[:19] if e.last_accessed else '未知'}"
+        )
+
+    return json.dumps({
+        "status": "ok",
+        "count": len(entries),
+        "novels": novel_list,
+        "message": (
+            f"共 {len(entries)} 本已加载的小说。"
+            f" 用 resume_novel({len(entries)} 本中的序号从 0 开始) 恢复，"
+            f"或用 load_novel(路径) 加载新的。"
+        ),
+    }, ensure_ascii=False)
+
+
+@tool
+def resume_novel(novel_index: int = 0) -> str:
+    """恢复之前加载过的小说。
+
+    从注册表中按索引恢复，自动加载所有章节和已设计的角色。
+
+    Args:
+        novel_index: 小说在列表中的索引（从 0 开始）。调用 list_novels 查看。
+    """
+    entries = list_all_novels()
+
+    if not entries:
+        return json.dumps({"error": "还没有加载过任何小说。请用 load_novel(路径) 加载。"})
+
+    if novel_index < 0 or novel_index >= len(entries):
+        return json.dumps({
+            "error": f"索引 {novel_index} 无效。可用范围: 0-{len(entries)-1}",
+            "available": [f"[{i}]《{e.title}》" for i, e in enumerate(entries)],
+        })
+
+    entry = entries[novel_index]
+
+    # 从 novel.json 恢复
+    novel_json_path = os.path.join(entry.project_dir, "novel.json")
+    if not os.path.exists(novel_json_path):
+        return json.dumps({"error": f"小说数据文件不存在: {novel_json_path}。请重新 load_novel('{entry.novel_path}')"})
+
+    _ctx.novel = Novel.load(novel_json_path)
+    _ctx.novel.output_dir = entry.project_dir
+    update_novel_access(entry.novel_path)
+
+    # 列出章节和角色状态
+    completed = sum(1 for ch in _ctx.novel.chapters if ch.status == "completed")
+    chars_known = [c.name for c in _ctx.novel.characters]
+
+    return json.dumps({
+        "status": "ok",
+        "title": entry.title,
+        "total_chapters": entry.total_chapters,
+        "completed_chapters": completed,
+        "style": entry.style,
+        "characters_known": chars_known,
+        "message": (
+            f"已恢复《{entry.title}》，共 {entry.total_chapters} 章"
+            f"（已完成 {completed} 章）。"
+            + (f" 全书角色: {', '.join(chars_known)}。" if chars_known else "")
+            + f" 请调用 list_chapters 查看详情，select_chapter(N) 选择要生成的章节。"
+        ),
     }, ensure_ascii=False)
 
 
@@ -724,11 +840,24 @@ def save_project() -> str:
     """将当前项目状态保存到 JSON 文件。可在任何阶段调用。"""
     saved = []
 
-    # 保存全书数据
+    # 保存全书数据 + 同步注册表
     if _ctx.novel:
         novel_path = os.path.join(_ctx.novel.output_dir, "novel.json")
         _ctx.novel.save(novel_path)
         saved.append(novel_path)
+
+        # 同步注册表（更新章节数、风格、访问时间）
+        style = _ctx.novel.style_profile.name if _ctx.novel.style_profile else ""
+        try:
+            register_novel(
+                _ctx.novel.file_path,
+                _ctx.novel.title,
+                _ctx.novel.total_chapters,
+                _ctx.novel.output_dir,
+                style,
+            )
+        except Exception:
+            pass  # 注册表更新失败不影响主流程
 
     # 保存当前章数据
     if _ctx.chapter_data:
@@ -783,6 +912,8 @@ def build_agent():
         .with_skill("novel2comic")
         .with_tools(
             load_novel,
+            list_novels,
+            resume_novel,
             list_chapters,
             select_chapter,
             analyze_text,
@@ -813,13 +944,14 @@ async def run_novel_agent(novel_path: str):
         f"## 任务：加载小说并准备生成漫画\n\n"
         f"小说文件路径：{novel_path}\n\n"
         f"### 执行计划\n"
-        f"1. 调用 load_novel('{novel_path}') 加载小说并解析所有章节\n"
+        f"1. 调用 load_novel('{novel_path}') 加载小说（如果已加载过会直接用缓存）\n"
         f"2. 调用 list_chapters 查看章节列表\n"
         f"3. 告诉我章节列表，让我选择要生成第几章\n"
         f"4. 我选择后，调用 select_chapter(N) 选中该章\n"
         f"5. 然后按顺序执行：analyze_text → design_characters → extract_scenes → storyboard_scene(每个场景) → generate_images → compile_comic → save_project\n\n"
         f"每步完成后汇报结果。如果我对某个结果不满意，我会告诉你如何调整。\n"
-        f"生成完一章后，我可以叫你继续生成其他章节。"
+        f"生成完一章后，我可以叫你继续生成其他章节。\n"
+        f"如果我下次想继续，用 list_novels 查看已加载的小说，resume_novel(索引) 恢复。"
     )
 
     print(f"\n[Agent] 加载小说: {novel_path}")

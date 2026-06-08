@@ -389,6 +389,140 @@ def test_novel_agent_tools():
     print("  [PASS] test_novel_agent_tools passed")
 
 
+def test_novel_registry():
+    """测试小说注册表：注册、查找、缓存命中、列表。"""
+    from src.novel_registry import (
+        register_novel, find_novel, list_all_novels, save_registry, load_registry,
+    )
+    import tempfile
+
+    # 清理注册表（避免干扰其他测试）
+    reg_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "projects", "novel_registry.json",
+    )
+    if os.path.exists(reg_path):
+        os.remove(reg_path)
+
+    # 创建临时小说文件
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+    ) as f:
+        f.write("第一章 测试\n这是测试内容。\n\n第二章 继续\n更多内容。")
+        tmp_path = f.name
+
+    try:
+        # 1. 首次注册
+        entry = register_novel(tmp_path, "测试小说", 2, "/tmp/test_project")
+        assert entry.title == "测试小说"
+        assert entry.total_chapters == 2
+        print("  [PASS] Registry: register_novel")
+
+        # 2. 查找（缓存命中 —— 文件未变）
+        found = find_novel(tmp_path)
+        assert found is not None
+        assert found.title == "测试小说"
+        assert found.total_chapters == 2
+        print("  [PASS] Registry: find_novel (cache hit)")
+
+        # 3. 列表
+        all_novels = list_all_novels()
+        assert len(all_novels) >= 1
+        assert any(n.title == "测试小说" for n in all_novels)
+        print("  [PASS] Registry: list_all_novels")
+
+        # 4. 修改文件后缓存失效
+        with open(tmp_path, "a", encoding="utf-8") as f:
+            f.write("\n第三章 新增\n新内容。")
+        found_after_change = find_novel(tmp_path)
+        assert found_after_change is None  # 文件变了，缓存失效
+        print("  [PASS] Registry: cache miss after file change")
+
+        # 5. 不存在的文件
+        not_found = find_novel("nonexistent.txt")
+        assert not_found is None
+        print("  [PASS] Registry: find_novel (not found)")
+
+        # 6. 重新注册更新后的文件
+        entry2 = register_novel(tmp_path, "测试小说v2", 3, "/tmp/test_project2")
+        assert entry2.total_chapters == 3
+        found2 = find_novel(tmp_path)
+        assert found2 is not None
+        assert found2.total_chapters == 3
+        print("  [PASS] Registry: re-register after file change")
+
+    finally:
+        os.unlink(tmp_path)
+        if os.path.exists(reg_path):
+            os.remove(reg_path)
+
+    print("  [PASS] test_novel_registry passed")
+
+
+def test_load_novel_cache_hit():
+    """测试 load_novel 的缓存命中流程。"""
+    import novel2comic.agent as agent_module
+    import tempfile
+
+    # 准备测试小说
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(NOVEL_TEXT)
+        novel_path = f.name
+
+    # 清理注册表
+    reg_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "projects", "novel_registry.json",
+    )
+    if os.path.exists(reg_path):
+        os.remove(reg_path)
+
+    try:
+        # 第一次加载：缓存未命中
+        result1 = json.loads(agent_module.load_novel.func(novel_path))
+        assert result1["status"] == "ok"
+        assert result1["cached"] == False, f"First load should miss cache: {result1}"
+        assert result1["total_chapters"] == 3
+        print("  [PASS] Load novel: first time (cache miss)")
+
+        # 第二次加载同一文件：缓存命中
+        result2 = json.loads(agent_module.load_novel.func(novel_path))
+        assert result2["status"] == "ok"
+        assert result2["cached"] == True, f"Second load should hit cache: {result2}"
+        assert result2["total_chapters"] == 3
+        assert agent_module._ctx.novel is not None
+        assert agent_module._ctx.novel.total_chapters == 3
+        print("  [PASS] Load novel: second time (cache hit)")
+
+        # list_novels 应该能看到
+        result3 = json.loads(agent_module.list_novels.func())
+        assert result3["count"] >= 1
+        print("  [PASS] list_novels shows cached novel")
+
+        # resume_novel 恢复
+        if agent_module._ctx.novel:
+            agent_module._ctx.novel = None  # 先清空
+        result4 = json.loads(agent_module.resume_novel.func(0))
+        assert result4["status"] == "ok"
+        assert agent_module._ctx.novel is not None
+        assert agent_module._ctx.novel.total_chapters == 3
+        print("  [PASS] resume_novel restores from cache")
+
+        # resume_novel 错误索引
+        result5 = json.loads(agent_module.resume_novel.func(99))
+        assert "error" in result5
+        print("  [PASS] resume_novel(99) returns error")
+
+    finally:
+        os.unlink(novel_path)
+        if os.path.exists(reg_path):
+            os.remove(reg_path)
+
+    print("  [PASS] test_load_novel_cache_hit passed")
+
+
 if __name__ == "__main__":
     test_style_detection()
     test_agent_tools_end_to_end()
@@ -396,4 +530,6 @@ if __name__ == "__main__":
     test_chapter_parser()
     test_novel_model()
     test_novel_agent_tools()
+    test_novel_registry()
+    test_load_novel_cache_hit()
     print("\n*** All tests passed! ***")
