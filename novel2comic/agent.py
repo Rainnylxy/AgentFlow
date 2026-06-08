@@ -49,6 +49,9 @@ from src.novel_registry import (
     register_novel, find_novel, list_all_novels,
     update_novel_access, update_novel_style, update_novel_chapters,
 )
+from src.novel_rag import (
+    NovelRAG, build_context_from_search, build_character_context,
+)
 
 # ============================================================
 # 共享上下文（Tool 通过此访问 LLM / ImageGen / Data）
@@ -59,6 +62,7 @@ class AgentContext:
     def __init__(self):
         self.novel: Optional[Novel] = None         # 全书数据（章节列表 + 角色库）
         self.chapter_data: Optional[ChapterData] = None  # 当前章的 Pipeline 状态
+        self.rag: Optional[NovelRAG] = None        # 全书 RAG 知识库
         self.openai_client = None   # openai.OpenAI 同步客户端（供 Tool 内 LLM 调用）
         self.llm_model: str = ""
         self.img_gen: Optional[ImageGenAdapter] = None
@@ -123,6 +127,12 @@ def load_novel(file_path: str) -> str:
             _ctx.novel.output_dir = cached.project_dir
             update_novel_access(file_path)
 
+            # 加载 RAG 索引
+            _ctx.rag = NovelRAG(cached.project_dir)
+            rag_path = os.path.join(cached.project_dir, "novel_rag.json")
+            if _ctx.rag.load(rag_path):
+                print(f"  [RAG] 从缓存加载: {_ctx.rag.total_chunks} 个文本块")
+
             return json.dumps({
                 "status": "ok",
                 "cached": True,
@@ -161,6 +171,19 @@ def load_novel(file_path: str) -> str:
     # 持久化
     novel_path = os.path.join(project_dir, "novel.json")
     _ctx.novel.save(novel_path)
+
+    # 构建 RAG 索引
+    _ctx.rag = NovelRAG(project_dir)
+    rag_path = os.path.join(project_dir, "novel_rag.json")
+
+    # 检查是否有缓存的 RAG
+    if not _ctx.rag.load(rag_path):
+        print(f"  [RAG] 正在索引 {len(chapters)} 章...")
+        chunk_count = _ctx.rag.index_novel(chapters, _ctx.openai_client)
+        _ctx.rag.save(rag_path)
+        print(f"  [RAG] 索引完成: {chunk_count} 个文本块")
+    else:
+        print(f"  [RAG] 从缓存加载: {_ctx.rag.total_chunks} 个文本块")
 
     # 注册到注册表
     register_novel(file_path, base_name, len(chapters), project_dir)
@@ -244,6 +267,11 @@ def resume_novel(novel_index: int = 0) -> str:
     _ctx.novel = Novel.load(novel_json_path)
     _ctx.novel.output_dir = entry.project_dir
     update_novel_access(entry.novel_path)
+
+    # 加载 RAG
+    _ctx.rag = NovelRAG(entry.project_dir)
+    rag_path = os.path.join(entry.project_dir, "novel_rag.json")
+    _ctx.rag.load(rag_path)  # 静默加载，没有也不报错
 
     # 列出章节和角色状态
     completed = sum(1 for ch in _ctx.novel.chapters if ch.status == "completed")
@@ -343,6 +371,105 @@ def select_chapter(chapter_index: int) -> str:
             + (f" 已从前面章节继承 {len(novel.characters)} 个角色。" if novel.characters else "")
             + " 请调用 analyze_text 开始生成。"
         ),
+    }, ensure_ascii=False)
+
+
+# ============================================================
+# RAG 检索 Tool
+# ============================================================
+
+@tool
+def search_novel(query: str, top_k: int = 5) -> str:
+    """在全书内容中检索与查询相关的段落（RAG 语义搜索）。
+
+    可用于查找角色背景、世界观设定、前情提要、特定场景描述等。
+    在角色设计或分镜生成之前调用，获取更丰富的上下文。
+
+    Args:
+        query: 搜索查询（如 "苏墨的外貌"、"将军府布局"、"暗巷描写"）
+        top_k: 返回结果数量，默认 5
+    """
+    rag = _ctx.rag
+    if not rag or not rag.is_indexed:
+        return json.dumps({"error": "RAG 索引未就绪。请先 load_novel 加载小说。"})
+
+    results = rag.search(query, top_k=top_k, openai_client=_ctx.openai_client)
+
+    if not results:
+        return json.dumps({
+            "status": "ok",
+            "query": query,
+            "results": [],
+            "message": "未找到相关内容。",
+        }, ensure_ascii=False)
+
+    formatted = []
+    for r in results:
+        formatted.append({
+            "chapter": f"第{r['chapter_index']}章《{r['chapter_title']}》",
+            "score": r["score"],
+            "text": r["text"][:300],
+        })
+
+    return json.dumps({
+        "status": "ok",
+        "query": query,
+        "count": len(formatted),
+        "results": formatted,
+        "message": f"找到 {len(formatted)} 条相关段落。",
+        "context": build_context_from_search(rag, query, _ctx.openai_client, top_k=top_k),
+    }, ensure_ascii=False)
+
+
+@tool
+def get_character_info(character_name: str) -> str:
+    """获取指定角色在全书中的详细信息。
+
+    检索角色的所有出场场景、外貌描写、对话和互动，
+    用于设计角色外貌或编写分镜时保持一致性。
+
+    Args:
+        character_name: 角色中文名（如 "苏墨"）
+    """
+    rag = _ctx.rag
+    if not rag or not rag.is_indexed:
+        return json.dumps({"error": "RAG 索引未就绪。请先 load_novel 加载小说。"})
+
+    # 1. 用 RAG 搜索角色出场记录
+    appearances = rag.search_by_character(character_name, top_k=15)
+
+    # 2. 用嵌入搜索外貌相关描述
+    desc_results = rag.search(
+        f"{character_name} 外貌 长相 穿着 服饰 特征",
+        top_k=5, openai_client=_ctx.openai_client,
+    )
+
+    # 3. 搜索角色关系
+    relation_results = rag.search(
+        f"{character_name} 关系 对话 互动 冲突",
+        top_k=5, openai_client=_ctx.openai_client,
+    )
+
+    context = build_character_context(rag, character_name)
+
+    return json.dumps({
+        "status": "ok",
+        "character": character_name,
+        "appearance_count": len(appearances),
+        "appearances": [
+            {"chapter": f"第{r['chapter_index']}章", "text": r["text"][:200]}
+            for r in appearances[:8]
+        ],
+        "descriptions": [
+            {"chapter": f"第{r['chapter_index']}章", "score": r["score"], "text": r["text"][:200]}
+            for r in desc_results
+        ],
+        "relations": [
+            {"chapter": f"第{r['chapter_index']}章", "score": r["score"], "text": r["text"][:200]}
+            for r in relation_results
+        ],
+        "context": context,
+        "message": f"找到角色 '{character_name}' 的 {len(appearances)} 处出场记录。",
     }, ensure_ascii=False)
 
 
@@ -463,10 +590,19 @@ def design_characters() -> str:
 
 重要：sd_trigger_words 必须足够详细以确保每次生图角色外貌一致。"""
 
+    # 从 RAG 中检索每个角色的全书上下文
+    rag_context = ""
+    if _ctx.rag and _ctx.rag.is_indexed:
+        for char in new_chars:
+            char_ctx = build_character_context(_ctx.rag, char["name"], max_chunks=3)
+            if char_ctx:
+                rag_context += char_ctx + "\n\n"
+
     user_prompt = (
         f"## 人物列表\n" + "\n".join(f"- {c['name']} ({c['role']})" for c in new_chars) +
         f"\n\n## 原文片段（含外貌描写）\n{text_context}\n\n"
-        f"## 风格\n{data.style_profile.name if data.style_profile else 'auto'}\n\n"
+        + (f"## 全书角色上下文（RAG）\n{rag_context}\n\n" if rag_context else "")
+        + f"## 风格\n{data.style_profile.name if data.style_profile else 'auto'}\n\n"
         f"请为每个角色生成 Character Sheet（JSON 数组）。"
     )
 
@@ -619,11 +755,21 @@ def storyboard_scene(scene_id: int) -> str:
 3. 关键对话不能遗漏
 4. 相邻格之间景别/视角要有变化"""
 
+    # 从 RAG 检索场景相关上下文
+    rag_context = ""
+    if _ctx.rag and _ctx.rag.is_indexed:
+        # 用场景标题 + 关键台词作为查询
+        rag_query = f"{scene.title} {scene.summary} {scene.key_dialogue}"
+        rag_context = build_context_from_search(
+            _ctx.rag, rag_query, _ctx.openai_client, top_k=3, max_chars=1500,
+        )
+
     user_prompt = (
         f"## 场景信息\n- 标题: {scene.title}\n- 摘要: {scene.summary}\n"
         f"- 情绪: {scene.emotion_arc}\n- 关键台词: {scene.key_dialogue}\n\n"
         f"## 场景原文\n{scene_text}\n\n"
-        f"## 角色信息\n{char_info}\n\n"
+        + (f"## 全书相关上下文（RAG）\n{rag_context}\n\n" if rag_context else "")
+        + f"## 角色信息\n{char_info}\n\n"
         f"## 风格\n{data.style_profile.name if data.style_profile else 'auto'}\n\n"
         f"请生成 3-6 格分镜脚本（JSON 数组）。"
     )
@@ -916,6 +1062,8 @@ def build_agent():
             resume_novel,
             list_chapters,
             select_chapter,
+            search_novel,
+            get_character_info,
             analyze_text,
             design_characters,
             extract_scenes,
