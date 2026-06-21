@@ -7,9 +7,14 @@ import json
 import tempfile
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# 也需要项目根来 import novel2comic 包
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+# 添加 novel2comic/ 到路径（使 from src.xxx 可用）
+_n2c_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _n2c_dir not in sys.path:
+    sys.path.insert(0, _n2c_dir)
+# 添加父目录（使 import novel2comic 可用），agentflow 通过 PYTHONPATH 提供
+_parent_dir = os.path.dirname(_n2c_dir)
+if _parent_dir not in sys.path:
+    sys.path.insert(0, _parent_dir)
 
 from src.models import ChapterData, AnalysisResult, CharacterAppearance, CharacterSheet
 from src.img_adapter import ImageGenAdapter

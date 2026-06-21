@@ -24,14 +24,8 @@ from typing import Optional
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-# 添加路径
-# novel2comic/ → 用于 from src.models / from src.styles / from src.img_adapter
-_n2c_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, _n2c_dir)
-# 项目根 → 用于 from agentflow.runtime...
-_project_root = os.path.dirname(_n2c_dir)
-sys.path.insert(0, _project_root)
-
+# 路径：agentflow 安装为包后，以下导入自动生效
+# 开发阶段：设置 PYTHONPATH=/path/to/AgentFlow 即可
 from agentflow.runtime.builder import AgentBuilder
 from agentflow.runtime.toolkit import tool
 from agentflow.runtime.memory.manager import MemoryProfile
@@ -51,6 +45,7 @@ from src.novel_registry import (
 )
 from src.knowledge_graph import (
     extract_graph_from_text, update_graph_with_chapter, graph_to_context,
+    extract_story_graph_from_text, update_story_graph_with_chapter,
 )
 
 # ============================================================
@@ -184,11 +179,11 @@ def load_novel(file_path: str) -> str:
     # 持久化
     novel_path = os.path.join(project_dir, "novel.json")
 
-    # 构建初始知识图谱
+    # 构建初始故事知识图谱（v2 扩展本体）
     if _ctx.novel.total_chapters >= 1:
-        print("  [Graph] 正在从全书提取人物关系图谱...")
+        print("  [Graph] 正在从全书提取故事知识图谱（人物+事件+地点+组织+物品）...")
 
-        # 采样策略：取每章开头 1000 字 + 均匀采样保证覆盖面
+        # 采样策略：取每章前 1500 字 + 均匀采样保证覆盖面
         total = _ctx.novel.total_chapters
         sample_count = min(total, 10)  # 最多采样 10 章
         step = max(1, total // sample_count)
@@ -197,16 +192,15 @@ def load_novel(file_path: str) -> str:
         seed_text_parts = []
         for idx in sampled_indices:
             ch = _ctx.novel.chapters[idx]
-            seed_text_parts.append(f"第{ch.index}章 {ch.title}\n{ch.content[:1000]}")
+            seed_text_parts.append(f"第{ch.index}章 {ch.title}\n{ch.content[:1500]}")
         seed_text = "\n\n".join(seed_text_parts)
 
-        _ctx.novel.character_graph = extract_graph_from_text(
+        _ctx.novel.story_graph = extract_story_graph_from_text(
             seed_text, _ctx.openai_client, model=_ctx.llm_model,
         )
-        node_count = len(_ctx.novel.character_graph.nodes)
-        edge_count = len(_ctx.novel.character_graph.edges)
-        _ctx.novel.character_graph.last_updated_chapter = total
-        print(f"  [Graph] 提取完成: {node_count} 个角色, {edge_count} 条关系 (采样 {len(sampled_indices)}/{total} 章)")
+        _ctx.novel.story_graph.last_updated_chapter = total
+        counts = _ctx.novel.story_graph.node_type_counts()
+        print(f"  [Graph] 提取完成: {counts} (采样 {len(sampled_indices)}/{total} 章)")
 
     _ctx.novel.save(novel_path)
 
@@ -379,6 +373,18 @@ def select_chapter(chapter_index: int) -> str:
     if novel.style_profile:
         _ctx.chapter_data.style_profile = novel.style_profile
 
+    # 增量更新知识图谱（新章节到达时自动更新）
+    if novel.story_graph and novel.story_graph.last_updated_chapter < chapter_index:
+        print(f"  [Graph] 正在用第{chapter_index}章更新故事知识图谱...")
+        try:
+            novel.story_graph = update_story_graph_with_chapter(
+                novel.story_graph, chapter.content, chapter_index,
+                _ctx.openai_client, model=_ctx.llm_model,
+            )
+            print(f"  [Graph] 更新完成。")
+        except Exception as e:
+            print(f"  [Graph] 更新失败（非致命）: {e}")
+
     return json.dumps({
         "status": "ok",
         "chapter_index": chapter_index,
@@ -400,59 +406,95 @@ def select_chapter(chapter_index: int) -> str:
 
 @tool
 def query_graph() -> str:
-    """查看当前全书的人物关系知识图谱。
+    """查看当前全书的故事知识图谱（v2 扩展本体）。
 
-    返回所有角色节点和关系边，包括亲密度、权力动态、情感张力等结构化信息。
+    返回：人物、事件、地点、组织、物品、关系边、事件因果链等信息。
     图谱会在加载小说和选择章节时自动更新。
     """
     novel = _ctx.novel
-    if not novel or not novel.character_graph:
+    if not novel or not novel.story_graph:
         return json.dumps({"error": "知识图谱尚未构建。请先 load_novel 加载小说。"})
 
-    graph = novel.character_graph
+    graph = novel.story_graph
     context = graph_to_context(graph)
+    counts = graph.node_type_counts()
 
-    nodes_info = []
-    for n in sorted(graph.nodes, key=lambda x: -x.importance):
-        nodes_info.append({
-            "name": n.name,
-            "role": n.role_type,
-            "faction": n.faction,
-            "importance": n.importance,
-            "status": n.status,
-            "first_chapter": n.first_appearance_chapter,
+    # 人物
+    persons_info = []
+    for n in sorted(graph.person_nodes, key=lambda x: -x.importance):
+        persons_info.append({
+            "name": n.name, "role": n.role_type, "faction": n.faction,
+            "importance": n.importance, "status": n.status,
             "description": n.description,
         })
 
-    edges_info = []
-    for e in graph.edges:
-        edges_info.append({
-            "from": e.from_char,
-            "to": e.to_char,
-            "type": e.relation_type,
-            "sub_type": e.sub_type,
-            "intimacy": e.intimacy,
-            "power": e.power_dynamic,
-            "tension": e.current_tension,
-            "public": e.public_knowledge,
+    # 人物关系
+    rels_info = []
+    for e in graph.relationship_edges:
+        rels_info.append({
+            "from": e.from_char, "to": e.to_char,
+            "type": e.relation_type, "sub_type": e.sub_type,
+            "intimacy": e.intimacy, "power": e.power_dynamic,
+            "tension": e.current_tension, "public": e.public_knowledge,
             "history": e.shared_history,
         })
 
+    # 事件
+    events_info = []
+    for e in graph.event_timeline():
+        events_info.append({
+            "name": e.name, "type": e.event_type,
+            "chapters": f"{e.chapter_start}-{e.chapter_end}",
+            "location": e.location, "importance": e.importance,
+            "summary": e.summary,
+        })
+
+    # 地点
+    locations_info = [{"name": n.name, "type": n.location_type,
+                       "parent": n.parent, "description": n.description}
+                      for n in graph.location_nodes]
+
+    # 组织
+    orgs_info = [{"name": n.name, "type": n.org_type, "leader": n.leader,
+                  "status": n.status, "description": n.description}
+                 for n in graph.org_nodes]
+
+    # 物品
+    items_info = [{"name": n.name, "type": n.item_type, "grade": n.grade,
+                   "description": n.description}
+                  for n in graph.item_nodes]
+
+    # 因果链
+    causal_info = []
+    for e in graph.event_relation_edges:
+        if e.relation_type == "causes":
+            causal_info.append(f"{e.from_event} → {e.to_event}")
+
+    # 变化时间线
     timeline_info = []
-    for t in graph.timeline[-10:]:  # 最近 10 条变化
+    for t in graph.timeline[-10:]:
         timeline_info.append(
             f"第{t.chapter}章: {t.from_char}←→{t.to_char} {t.field} {t.old_value}→{t.new_value} ({t.trigger_event})"
         )
 
     return json.dumps({
         "status": "ok",
-        "node_count": len(graph.nodes),
-        "edge_count": len(graph.edges),
-        "nodes": nodes_info,
-        "edges": edges_info,
+        "node_counts": counts,
+        "total_nodes": graph.total_node_count,
+        "total_edges": graph.total_edge_count,
+        "persons": persons_info,
+        "relationships": rels_info,
+        "events": events_info,
+        "locations": locations_info,
+        "organizations": orgs_info,
+        "items": items_info,
+        "causal_chains": causal_info,
         "recent_changes": timeline_info,
         "context": context,
-        "message": f"图谱: {len(graph.nodes)} 个角色, {len(graph.edges)} 条关系。最近更新: 第{graph.last_updated_chapter}章。",
+        "message": (
+            f"故事图谱: {counts}，共 {graph.total_node_count} 节点, "
+            f"{graph.total_edge_count} 条边。最近更新: 第{graph.last_updated_chapter}章。"
+        ),
     }, ensure_ascii=False)
 
 
@@ -467,18 +509,20 @@ def query_character_relations(character_name: str) -> str:
         character_name: 角色中文名（如 "苏墨"）
     """
     novel = _ctx.novel
-    if not novel or not novel.character_graph:
+    if not novel or not novel.story_graph:
         return json.dumps({"error": "知识图谱尚未构建。"})
 
-    graph = novel.character_graph
-    node = graph.get_node(character_name)
+    graph = novel.story_graph
+    node = graph.get_person_node(character_name)
     if not node:
-        known = [n.name for n in graph.nodes]
+        known = [n.name for n in graph.person_nodes]
         return json.dumps({
             "error": f"角色 '{character_name}' 不在图谱中。已知角色: {', '.join(known)}",
         })
 
-    edges = graph.get_edges(character_name)
+    # 获取该角色的所有关系
+    edges = [e for e in graph.relationship_edges
+             if e.from_char == character_name or e.to_char == character_name]
     relations = []
     hints = []
     for e in edges:
@@ -511,6 +555,162 @@ def query_character_relations(character_name: str) -> str:
     }, ensure_ascii=False)
 
 
+@tool
+def query_events(character_name: str = "") -> str:
+    """查询故事事件时间线，可按人物筛选。
+
+    Args:
+        character_name: 可选，按角色名筛选事件。留空则返回全部事件时间线。
+    """
+    novel = _ctx.novel
+    if not novel or not novel.story_graph:
+        return json.dumps({"error": "知识图谱尚未构建。"})
+
+    graph = novel.story_graph
+
+    if character_name:
+        events = graph.character_events(character_name)
+        return json.dumps({
+            "status": "ok",
+            "character": character_name,
+            "event_count": len(events),
+            "events": events,
+            "message": f"{character_name} 参与了 {len(events)} 个事件。",
+        }, ensure_ascii=False)
+
+    events = graph.event_timeline()
+    events_info = []
+    for e in events:
+        events_info.append({
+            "name": e.name, "type": e.event_type,
+            "chapters": f"{e.chapter_start}-{e.chapter_end}",
+            "location": e.location, "importance": e.importance,
+            "cause": e.cause, "effect": e.effect,
+            "summary": e.summary,
+            "participants": e.participants,
+        })
+
+    return json.dumps({
+        "status": "ok",
+        "event_count": len(events_info),
+        "events": events_info,
+        "message": f"共 {len(events_info)} 个事件。",
+    }, ensure_ascii=False)
+
+
+@tool
+def query_location(location_name: str) -> str:
+    """查询地点详情及层级关系。
+
+    Args:
+        location_name: 地点名
+    """
+    novel = _ctx.novel
+    if not novel or not novel.story_graph:
+        return json.dumps({"error": "知识图谱尚未构建。"})
+
+    graph = novel.story_graph
+    node = graph.get_location_node(location_name)
+    if not node:
+        known = [n.name for n in graph.location_nodes]
+        return json.dumps({
+            "error": f"地点 '{location_name}' 不在图谱中。已知地点: {', '.join(known) if known else '（无）'}",
+        })
+
+    # 查层级
+    hierarchy = graph.location_hierarchy()
+    children = hierarchy.get("children", {}).get(location_name, [])
+
+    # 查该地点发生的事件
+    events_here = []
+    for e in graph.located_at_edges:
+        if e.location == location_name:
+            ev = graph.get_event_node(e.event)
+            if ev:
+                events_here.append({"name": ev.name, "chapters": f"{ev.chapter_start}-{ev.chapter_end}",
+                                   "summary": ev.summary})
+
+    return json.dumps({
+        "status": "ok",
+        "location": {
+            "name": node.name, "type": node.location_type,
+            "parent": node.parent, "description": node.description,
+            "factions": node.factions, "is_destroyed": node.is_destroyed,
+        },
+        "parent": node.parent,
+        "children": children,
+        "events_here": events_here,
+        "message": f"{location_name} [{node.location_type}]"
+                   + (f" → 父级: {node.parent}" if node.parent else "（顶层地点）")
+                   + (f" | 子地点: {', '.join(children)}" if children else ""),
+    }, ensure_ascii=False)
+
+
+@tool
+def query_organization(org_name: str) -> str:
+    """查询组织/势力详情及成员。
+
+    Args:
+        org_name: 组织名
+    """
+    novel = _ctx.novel
+    if not novel or not novel.story_graph:
+        return json.dumps({"error": "知识图谱尚未构建。"})
+
+    graph = novel.story_graph
+    result = graph.org_members(org_name)
+    if not result:
+        known = [n.name for n in graph.org_nodes]
+        return json.dumps({
+            "error": f"组织 '{org_name}' 不在图谱中。已知组织: {', '.join(known) if known else '（无）'}",
+        })
+
+    return json.dumps({
+        "status": "ok",
+        "organization": {
+            "name": result["org"].name, "type": result["org"].org_type,
+            "leader": result["declared_leaders"], "members": result["declared_members"],
+            "base": result["org"].base, "status": result["org"].status,
+            "description": result["org"].description,
+        },
+        "members_from_edges": result["members_from_edges"],
+        "message": f"{org_name} [{result['org'].org_type}] 状态:{result['org'].status} | 首领:{', '.join(result['declared_leaders'])} | 成员:{len(result['declared_members'])}人",
+    }, ensure_ascii=False)
+
+
+@tool
+def query_item(item_name: str) -> str:
+    """查询物品/功法详情及归属历史。
+
+    Args:
+        item_name: 物品名
+    """
+    novel = _ctx.novel
+    if not novel or not novel.story_graph:
+        return json.dumps({"error": "知识图谱尚未构建。"})
+
+    graph = novel.story_graph
+    node = graph.get_item_node(item_name)
+    if not node:
+        known = [n.name for n in graph.item_nodes]
+        return json.dumps({
+            "error": f"物品 '{item_name}' 不在图谱中。已知物品: {', '.join(known) if known else '（无）'}",
+        })
+
+    ownership = graph.item_owners(item_name)
+
+    return json.dumps({
+        "status": "ok",
+        "item": {
+            "name": node.name, "type": node.item_type,
+            "grade": node.grade, "abilities": node.abilities,
+            "source": node.source, "description": node.description,
+        },
+        "ownership_history": ownership,
+        "message": f"{item_name} [{node.item_type}] {node.grade} | {node.description}",
+    }, ensure_ascii=False)
+
+
 # ============================================================
 # ============================================================
 # 情节问答 Tool
@@ -536,16 +736,17 @@ def ask_plot(question: str) -> str:
 
     # 2. 收集知识图谱上下文
     graph_context = ""
-    if novel.character_graph and novel.character_graph.node_count > 0:
+    if novel.story_graph and novel.story_graph.total_node_count > 0:
         # 找出问题中提到的角色
-        mentioned_chars = [n.name for n in novel.character_graph.nodes
+        mentioned_chars = [n.name for n in novel.story_graph.person_nodes
                            if n.name in question]
         for char_name in mentioned_chars:
             graph_context += f"\n[图谱] {char_name}: "
-            node = novel.character_graph.get_node(char_name)
+            node = novel.story_graph.get_person_node(char_name)
             if node:
                 graph_context += f"角色={node.role_type}, 阵营={node.faction}, {node.description}\n"
-            edges = novel.character_graph.get_edges(char_name)
+            edges = [e for e in novel.story_graph.relationship_edges
+                     if e.from_char == char_name or e.to_char == char_name]
             for e in edges:
                 other = e.to_char if e.from_char == char_name else e.from_char
                 graph_context += f"  ←→ {other}: {e.relation_type}({e.sub_type}), 亲密度={e.intimacy:+d}, {e.shared_history}\n"
@@ -595,7 +796,7 @@ def ask_plot(question: str) -> str:
         "status": "ok",
         "question": question,
         "searched_chapters": [f"第{ch.index}章《{ch.title}》" for ch in relevant_chapters[:5]],
-        "characters_mentioned": [n.name for n in novel.character_graph.nodes if n.name in question] if novel.character_graph else [],
+        "characters_mentioned": [n.name for n in novel.story_graph.person_nodes if n.name in question] if novel.story_graph else [],
         "answer": answer,
     }, ensure_ascii=False)
 
@@ -761,8 +962,8 @@ def design_characters() -> str:
 
     # 从知识图谱获取角色上下文
     graph_context = ""
-    if _ctx.novel and _ctx.novel.character_graph:
-        graph_context = graph_to_context(_ctx.novel.character_graph)
+    if _ctx.novel and _ctx.novel.story_graph:
+        graph_context = graph_to_context(_ctx.novel.story_graph)
 
     user_prompt = (
         f"## 人物列表\n" + "\n".join(f"- {c['name']} ({c['role']})" for c in new_chars) +
@@ -924,12 +1125,12 @@ def storyboard_scene(scene_id: int) -> str:
 
     # 从知识图谱获取分镜指导
     graph_hints = ""
-    if _ctx.novel and _ctx.novel.character_graph:
+    if _ctx.novel and _ctx.novel.story_graph:
         # 为场景中出场的每对角色生成分镜指导
         chars = scene.characters_in_scene
         for i, a in enumerate(chars):
             for b in chars[i+1:]:
-                hint = _ctx.novel.character_graph.get_storyboard_hints(a, b)
+                hint = _ctx.novel.story_graph.get_storyboard_hints(a, b)
                 if hint:
                     graph_hints += f"- {a} ←→ {b}: {hint}\n"
         if graph_hints:
@@ -1238,7 +1439,7 @@ def build_agent():
     # 构建 Agent
     agent = (AgentBuilder("novel2comic")
         .with_llm(llm)
-        .with_skills_dir(os.path.join(_project_root, "skills"))
+        .with_skills_dir(os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills"))
         .with_skill("novel2comic")
         .with_tools(
             load_novel,
@@ -1248,6 +1449,10 @@ def build_agent():
             select_chapter,
             query_graph,
             query_character_relations,
+            query_events,
+            query_location,
+            query_organization,
+            query_item,
             ask_plot,
             analyze_text,
             design_characters,
