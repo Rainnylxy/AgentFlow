@@ -31,21 +31,21 @@ class TestMemoryManager:
         assert len(facts) > 0
         assert any("refund" in str(f).lower() for f in facts)
 
-    def test_post_turn_extracts_facts(self):
+    async def test_post_turn_extracts_facts(self):
         mgr = MemoryManager(verbose=True)
         mgr.working.add(Message(role="user", content="I live in Beijing"))
         mgr.working.add(Message(role="assistant", content="Got it, Beijing it is."))
 
-        mgr.post_turn()
+        await mgr.post_turn()
         facts = mgr.episodic.get_all()
         assert any("Beijing" in str(f) for f in facts)
 
-    def test_full_cycle(self):
+    async def test_full_cycle(self):
         mgr = MemoryManager()
         mgr.pre_turn("What's the weather?")
         mgr.working.add(Message(role="user", content="What's the weather?"))
         mgr.working.add(Message(role="assistant", content="It's 22C in Beijing."))
-        mgr.post_turn()
+        await mgr.post_turn()
         assert mgr.episodic.count() > 0
 
     def test_working_memory_integration(self):

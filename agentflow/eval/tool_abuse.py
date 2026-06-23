@@ -28,7 +28,7 @@ class ToolAbuseEvaluator(BaseEvaluator):
         self.forbidden_tools = forbidden_tools or []
         self.max_allowed_calls = max_allowed_calls
 
-    def evaluate(self, expected: str, actual: str) -> EvalResult:
+    async def evaluate(self, expected: str, actual: str) -> EvalResult:
         return EvalResult(score=0.5, passed=True,
                           reason="Use evaluate_abuse(tool_calls) for structured scoring")
 

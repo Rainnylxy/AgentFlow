@@ -2,6 +2,9 @@
 
 协调 Working / Episodic / Semantic 三层记忆，
 提供自主记忆门、遗忘门、检索门。
+
+事实提取策略可通过 fact_extractor 参数注入，
+默认使用 KeywordFactExtractor（关键词模式匹配）。
 """
 
 from dataclasses import dataclass, field
@@ -10,6 +13,11 @@ from typing import Optional
 from agentflow.runtime.memory.working import WorkingMemory, Message
 from agentflow.runtime.memory.episodic import EpisodicMemory, MemoryFact
 from agentflow.runtime.memory.semantic import SemanticMemory
+from agentflow.runtime.memory.fact_extractor import (
+    BaseFactExtractor,
+    KeywordFactExtractor,
+    NoOpFactExtractor,
+)
 
 
 @dataclass
@@ -53,14 +61,23 @@ class MemoryManager:
         mgr = MemoryManager()
         facts = mgr.pre_turn("user question")   # 检索门
         # ... run LLM turn using mgr.working ...
-        mgr.post_turn()                          # 记忆门 + 遗忘门
+        await mgr.post_turn()                    # 记忆门 + 遗忘门
+
+    事实提取策略:
+        mgr = MemoryManager(fact_extractor=NoOpFactExtractor())  # 不提取事实
+        mgr = MemoryManager(fact_extractor=LLMFactExtractor(llm))  # LLM 驱动
 
     Backward-compatible attributes:
         .short_term  -> alias for .working
         .long_term   -> alias for .semantic
     """
 
-    def __init__(self, profile: Optional["MemoryProfile"] = None, verbose: bool = False):
+    def __init__(
+        self,
+        profile: Optional["MemoryProfile"] = None,
+        verbose: bool = False,
+        fact_extractor: Optional["BaseFactExtractor"] = None,
+    ):
         self.profile = profile or MemoryProfile.standard()
         self.verbose = verbose
         self.working = WorkingMemory(
@@ -70,6 +87,14 @@ class MemoryManager:
         self.episodic = EpisodicMemory(max_facts=self.profile.episodic_max)
         self.semantic = SemanticMemory(embedder=self.profile.semantic_embedder)
         self._turn_count = 0
+
+        # 事实提取策略：light profile 默认不提取，其余默认关键词
+        if fact_extractor is not None:
+            self._fact_extractor = fact_extractor
+        elif self.profile.episodic_max == 0:
+            self._fact_extractor = NoOpFactExtractor()
+        else:
+            self._fact_extractor = KeywordFactExtractor()
 
     # --- Backward-compatible aliases ---
     @property
@@ -105,31 +130,21 @@ class MemoryManager:
             facts.append(fact)
         return facts
 
-    def post_turn(self) -> None:
-        """记忆门 + 遗忘门：每个 turn 之后触发。"""
+    async def post_turn(self) -> None:
+        """记忆门 + 遗忘门：每个 turn 之后触发（异步）。"""
         if self.profile.auto_memorize:
-            self._extract_facts()
+            await self._extract_facts()
 
         if self.profile.auto_forget:
             self.episodic.forget_expired()
 
-    def _extract_facts(self) -> None:
-        """从工作记忆中提取结构化事实（简化版：关键词模式匹配）。
+    async def _extract_facts(self) -> None:
+        """从工作记忆中提取结构化事实，委托给注入的 FactExtractor 策略。
 
-        第一版使用规则匹配，不调用 LLM。
-        后续可升级为 LLM 驱动的提取。
+        异步设计：即使当前是同步关键词提取器，接口保持 async，
+        以便后续无缝升级为 LLM 驱动提取。
         """
-        for msg in self.working.get_context_window():
-            content_lower = msg.content.lower()
-            if any(phrase in content_lower for phrase in ["live in", "住在", "from", "city is", "location", " in ", "at "]) or any(kw in content_lower for kw in ["temperature", "weather", "度", "°"]):
-                fact = MemoryFact(
-                    fact_type="preference",
-                    subject=msg.role,
-                    predicate="location",
-                    object=msg.content[:100],
-                    confidence=0.6,
-                    timestamp=datetime.now(),
-                    source_turn=self._turn_count,
-                    ttl=86400 * 7,
-                )
-                self.episodic.add(fact)
+        messages = self.working.get_context_window()
+        facts = await self._fact_extractor.extract(messages, self._turn_count)
+        for fact in facts:
+            self.episodic.add(fact)

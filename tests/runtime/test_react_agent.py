@@ -1,11 +1,21 @@
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from agentflow.runtime.react_agent import ReActAgent
-from agentflow.runtime.tool_registry import ToolRegistry, Tool, ToolType
-from agentflow.runtime.memory import MemoryManager
+"""测试 ReAct 思考模式（通过 AgentBuilder + ThinkingMode.REACT）。
+
+原 tests/runtime/test_react_agent.py 直接测试已废弃的 ReActAgent 类。
+现在改为测试 AgentBuilder + ThinkingMode.REACT，行为等价。
+"""
+
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
+from agentflow.runtime.builder import AgentBuilder
+from agentflow.runtime.toolkit import tool
+from agentflow.runtime.thinking import ThinkingMode
+from agentflow.runtime.memory.manager import MemoryProfile
 
 
-class TestReActAgent:
+class TestReActViaBuilder:
+    """通过 AgentBuilder + ThinkingMode.REACT 测试 ReAct 行为。"""
+
     def test_agent_simple_answer_no_tools(self):
         """最简单的问答：无需工具调用。"""
         mock_client = AsyncMock()
@@ -13,15 +23,15 @@ class TestReActAgent:
             content="The answer is 42.", role="assistant", tool_calls=[],
         )
 
-        agent = ReActAgent(
-            name="test",
-            llm_client=mock_client,
-            system_prompt="You are helpful.",
-            tool_registry=ToolRegistry(),
-            memory_manager=MemoryManager(),
+        agent = (
+            AgentBuilder("test")
+            .with_llm(mock_client)
+            .with_prompt("You are helpful.")
+            .with_thinking(ThinkingMode.REACT)
+            .with_memory(MemoryProfile.light())
+            .build_sync()
         )
 
-        import asyncio
         result = asyncio.run(agent.run("What is the meaning of life?"))
 
         assert "42" in result.output
@@ -30,7 +40,6 @@ class TestReActAgent:
     def test_agent_uses_tool(self):
         """Agent 需要调用工具获取信息。"""
         mock_client = AsyncMock()
-        # 第一次返回 tool_call，第二次返回最终答案
         mock_client.chat.side_effect = [
             MagicMock(
                 content=None, role="assistant",
@@ -43,21 +52,22 @@ class TestReActAgent:
             MagicMock(content="2+2 equals 4", role="assistant", tool_calls=[]),
         ]
 
-        reg = ToolRegistry()
-        reg.register(Tool(
-            name="calculator", description="Calculate",
-            tool_type=ToolType.LOCAL,
-            func=lambda expression: str(eval(expression)),
-        ))
+        @tool
+        def calculator(expression: str) -> str:
+            """Calculate a math expression."""
+            return str(eval(expression))
 
-        agent = ReActAgent(
-            name="math", llm_client=mock_client,
-            system_prompt="You do math.",
-            tool_registry=reg, memory_manager=MemoryManager(),
-            max_iterations=5,
+        agent = (
+            AgentBuilder("math")
+            .with_llm(mock_client)
+            .with_prompt("You do math.")
+            .with_tools(calculator)
+            .with_thinking(ThinkingMode.REACT)
+            .with_memory(MemoryProfile.light())
+            .with_max_iterations(5)
+            .build_sync()
         )
 
-        import asyncio
         result = asyncio.run(agent.run("What is 2+2?"))
 
         assert "4" in result.output
@@ -76,19 +86,23 @@ class TestReActAgent:
             }],
         )
 
-        reg = ToolRegistry()
-        reg.register(Tool(name="echo", description="Echo",
-                          tool_type=ToolType.LOCAL, func=lambda text: text))
+        @tool
+        def echo(text: str) -> str:
+            """Echo back the text."""
+            return text
 
-        agent = ReActAgent(
-            name="loop", llm_client=mock_client,
-            system_prompt="You loop forever.",
-            tool_registry=reg, memory_manager=MemoryManager(),
-            max_iterations=2,
+        agent = (
+            AgentBuilder("loop")
+            .with_llm(mock_client)
+            .with_prompt("You loop forever.")
+            .with_tools(echo)
+            .with_thinking(ThinkingMode.REACT)
+            .with_memory(MemoryProfile.light())
+            .with_max_iterations(2)
+            .build_sync()
         )
 
-        import asyncio
         result = asyncio.run(agent.run("ping"))
 
         assert "maximum iterations" in result.output.lower()
-        assert len(result.steps) == 2  # 两次 tool calls 后强制停止
+        assert len(result.tool_calls) == 2  # 两次 tool calls 后强制停止

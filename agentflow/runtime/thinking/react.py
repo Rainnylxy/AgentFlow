@@ -1,6 +1,5 @@
 """ReAct 模式：Thought → Action → Observation 循环。"""
 
-import json
 from agentflow.runtime.thinking.base import ThinkingStrategy, ThinkContext, ThinkResult
 
 
@@ -14,9 +13,6 @@ class ReActStrategy(ThinkingStrategy):
     4. 重复直到 LLM 给出最终答案，或达到 max_iterations
     """
 
-    def __init__(self, toolkit=None):
-        self.toolkit = toolkit
-
     async def run(self, context: ThinkContext) -> ThinkResult:
         messages = [{"role": "system", "content": context.system_prompt}]
 
@@ -29,67 +25,25 @@ class ReActStrategy(ThinkingStrategy):
                 msg_dict["tool_calls"] = msg.tool_calls
             messages.append(msg_dict)
 
-        steps = []
-        tool_calls_made = []
+        tools_param = context.tools if context.tools else None
 
-        for i in range(context.max_iterations):
-            tools_param = context.tools if context.tools else None
-            response = await context.llm_client.chat(messages, tools=tools_param)
+        # 使用基类的共享工具执行循环
+        final_text, tool_calls_made = await self._execute_tool_loop(
+            context, messages, tools_param
+        )
 
-            if response.tool_calls:
-                # 记录 assistant 的 tool_calls 到消息历史
-                messages.append({
-                    "role": "assistant",
-                    "content": response.content or "",
-                    "tool_calls": response.tool_calls,
-                })
-
-                for tc in response.tool_calls:
-                    func_name = tc["function"]["name"]
-                    func_args = json.loads(tc["function"]["arguments"])
-
-                    # 通过 toolkit 执行（如果有的话）
-                    if self.toolkit:
-                        result = self.toolkit.execute(func_name, func_args)
-                        tool_output = result.output if result.success else result.error
-                    else:
-                        tool_output = f"[No toolkit] Called {func_name}({func_args})"
-
-                    tool_calls_made.append({
-                        "tool": func_name,
-                        "input": func_args,
-                        "output": tool_output,
-                    })
-
-                    messages.append({
-                        "role": "tool",
-                        "content": tool_output,
-                        "tool_call_id": tc.get("id", ""),
-                    })
-
-                steps.append({
-                    "iteration": i,
-                    "type": "tool_call",
-                    "calls": [tc["function"]["name"] for tc in response.tool_calls],
-                })
-            else:
-                # 最终回答
-                messages.append({"role": "assistant", "content": response.content})
-                steps.append({
-                    "iteration": i,
-                    "type": "final",
-                    "output": response.content,
-                })
-                return ThinkResult(
-                    output=response.content,
-                    tool_calls=tool_calls_made,
-                    steps=steps,
-                    mode_used="react",
-                )
+        # 如果最后一条消息是 tool 角色 → LLM 被截断，未给出最终答案
+        if messages and messages[-1].get("role") == "tool":
+            return ThinkResult(
+                output="Agent reached maximum iterations without a final answer.",
+                tool_calls=tool_calls_made,
+                steps=[{"type": "truncated", "iterations": context.max_iterations}],
+                mode_used="react",
+            )
 
         return ThinkResult(
-            output="Agent reached maximum iterations without a final answer.",
+            output=final_text,
             tool_calls=tool_calls_made,
-            steps=steps,
+            steps=[{"type": "final", "output": final_text}],
             mode_used="react",
         )

@@ -13,5 +13,5 @@ class EvalResult:
 
 class BaseEvaluator(ABC):
     @abstractmethod
-    def evaluate(self, expected: str, actual: str) -> EvalResult:
+    async def evaluate(self, expected: str, actual: str) -> EvalResult:
         ...

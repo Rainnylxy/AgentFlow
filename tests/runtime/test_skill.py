@@ -4,7 +4,7 @@ from agentflow.runtime.skill import Skill, SkillLoader
 
 
 class TestSkillLoader:
-    def test_load_from_file(self):
+    async def test_load_from_file(self):
         """从 .md 文件加载 Skill。"""
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".md", delete=False, encoding="utf-8"
@@ -23,7 +23,7 @@ class TestSkillLoader:
 
         try:
             loader = SkillLoader()
-            skill = loader.load(path)
+            skill = await loader.load(path)
 
             assert skill.name == "test-skill"
             assert skill.description == "A test skill"
@@ -33,7 +33,7 @@ class TestSkillLoader:
         finally:
             os.unlink(path)
 
-    def test_load_by_name_from_dir(self):
+    async def test_load_by_name_from_dir(self):
         """从 skills_dir 按名加载。"""
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -49,12 +49,12 @@ class TestSkillLoader:
                 )
 
             loader = SkillLoader(skills_dir=tmpdir)
-            skill = loader.load("test-skill")
+            skill = await loader.load("test-skill")
 
             assert skill.name == "test-skill"
             assert "Skill body" in skill.prompt
 
-    def test_load_all(self):
+    async def test_load_all(self):
         """加载目录下所有 .md 文件。"""
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -64,7 +64,7 @@ class TestSkillLoader:
                     f.write(f"---\nname: {name}\n---\n\nBody of {name}.\n")
 
             loader = SkillLoader()
-            skills = loader.load_all(tmpdir)
+            skills = await loader.load_all(tmpdir)
 
             assert len(skills) == 2
             names = {s.name for s in skills}
@@ -82,11 +82,11 @@ class TestSkillLoader:
         assert "## Test" in result
         assert "Content here" in result
 
-    def test_missing_file_raises(self):
+    async def test_missing_file_raises(self):
         """加载不存在的文件抛出 FileNotFoundError。"""
         loader = SkillLoader()
         try:
-            loader.load("nonexistent-file.md")
+            await loader.load("nonexistent-file.md")
             assert False, "Should have raised"
         except FileNotFoundError:
             pass

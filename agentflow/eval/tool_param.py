@@ -16,7 +16,7 @@ class ToolParamEvaluator(BaseEvaluator):
         self.expected_schema = expected_schema or {}
         self.param_overrides = param_overrides or {}
 
-    def evaluate(self, expected: str, actual: str) -> EvalResult:
+    async def evaluate(self, expected: str, actual: str) -> EvalResult:
         """字符串模式：尝试按 JSON 解析比较。"""
         try:
             exp = json.loads(expected)

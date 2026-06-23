@@ -14,7 +14,7 @@ class FaithfulnessEvaluator(BaseEvaluator):
     def __init__(self, strict_mode: bool = False):
         self.strict_mode = strict_mode
 
-    def evaluate(self, expected: str, actual: str) -> EvalResult:
+    async def evaluate(self, expected: str, actual: str) -> EvalResult:
         """字符串模式：简单关键词覆盖检测。"""
         if not expected:
             return EvalResult(score=1.0, passed=True, reason="No tool outputs to verify against")

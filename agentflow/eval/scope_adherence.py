@@ -23,7 +23,7 @@ class ScopeAdherenceEvaluator(BaseEvaluator):
         self.allowed_tools = allowed_tools or []
         self.forbidden_actions = forbidden_actions or []
 
-    def evaluate(self, expected: str, actual: str) -> EvalResult:
+    async def evaluate(self, expected: str, actual: str) -> EvalResult:
         return EvalResult(score=0.5, passed=True,
                           reason="Use evaluate_scope(agent_response, tool_calls, role_def) for structured scoring")
 

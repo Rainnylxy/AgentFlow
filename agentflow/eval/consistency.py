@@ -19,7 +19,7 @@ class ConsistencyEvaluator(BaseEvaluator):
         self.runs = runs
         self.max_deviation = max_deviation
 
-    def evaluate(self, expected: str, actual: str) -> EvalResult:
+    async def evaluate(self, expected: str, actual: str) -> EvalResult:
         return EvalResult(score=0.5, passed=True,
                           reason="Use evaluate_consistency(agent_fn, input) for multi-run scoring")
 

@@ -15,7 +15,7 @@ class AdaptabilityEvaluator(BaseEvaluator):
     def __init__(self, failure_patterns: dict = None):
         self.failure_patterns = failure_patterns or {}
 
-    def evaluate(self, expected: str, actual: str) -> EvalResult:
+    async def evaluate(self, expected: str, actual: str) -> EvalResult:
         return EvalResult(score=0.5, passed=True,
                           reason="Use evaluate_adaptability(trajectory, injected_failures) for structured scoring")
 

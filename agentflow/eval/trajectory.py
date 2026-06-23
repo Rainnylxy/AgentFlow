@@ -15,7 +15,7 @@ class TrajectoryEvaluator(BaseEvaluator):
     def __init__(self, max_redundant_calls: int = 3):
         self.max_redundant_calls = max_redundant_calls
 
-    def evaluate(self, expected: str, actual: str) -> EvalResult:
+    async def evaluate(self, expected: str, actual: str) -> EvalResult:
         return EvalResult(score=0.5, passed=True,
                           reason="Use evaluate_quality(trajectory) for structured scoring")
 

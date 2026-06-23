@@ -1,12 +1,26 @@
-"""ReAct Agent：Thought → Action → Observation 循环"""
+"""ReAct Agent：Thought → Action → Observation 循环
+
+⚠️ DEPRECATED: 此模块已废弃，请使用 AgentBuilder + ThinkingMode.REACT 替代。
+旧用法:
+    agent = ReActAgent(name=..., llm_client=..., system_prompt=..., ...)
+新用法:
+    agent = (AgentBuilder(name)
+        .with_llm(llm_client)
+        .with_prompt(system_prompt)
+        .with_thinking(ThinkingMode.REACT)
+        .build())
+"""
 
 import json
+import warnings
 from agentflow.runtime.agent import BaseAgent, AgentResult
 from agentflow.runtime.memory import Message
 
 
 class ReActAgent(BaseAgent):
-    """ReAct (Reasoning + Acting) Agent。
+    """ReAct (Reasoning + Acting) Agent — 已废弃。
+
+    ⚠️ DEPRECATED: Use AgentBuilder + ThinkingMode.REACT instead.
 
     执行循环：
     1. Thought: LLM 生成推理（通常需要工具调用）
@@ -14,6 +28,14 @@ class ReActAgent(BaseAgent):
     3. Observation: 将工具结果反馈给 LLM
     4. 重复直到 LLM 给出最终答案，或达到 max_iterations
     """
+
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "ReActAgent is deprecated. Use AgentBuilder + ThinkingMode.REACT instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)
 
     async def run(self, user_input: str) -> AgentResult:
         self.memory.short_term.clear()
@@ -63,7 +85,7 @@ class ReActAgent(BaseAgent):
                 for tc in response.tool_calls:
                     func_name = tc["function"]["name"]
                     func_args = json.loads(tc["function"]["arguments"])
-                    result = self.tool_registry.execute(func_name, func_args)
+                    result = await self.tool_registry.execute(func_name, func_args)
 
                     tool_calls_made.append({
                         "tool": func_name,

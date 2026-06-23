@@ -17,7 +17,7 @@ class TestAgentBuilder:
 
         agent = (AgentBuilder("minimal")
             .with_llm(mock_llm)
-            .build())
+            .build_sync())
 
         assert agent.name == "minimal"
         import asyncio
@@ -47,7 +47,7 @@ class TestAgentBuilder:
         agent = (AgentBuilder("tool-agent")
             .with_llm(mock_llm)
             .with_tools(echo)
-            .build())
+            .build_sync())
 
         import asyncio
         result = asyncio.run(agent.run("Echo hello world"))
@@ -63,7 +63,7 @@ class TestAgentBuilder:
         agent = (AgentBuilder("mem-agent")
             .with_llm(mock_llm)
             .with_memory(MemoryProfile.light())
-            .build())
+            .build_sync())
 
         assert agent.memory.profile.working.max_turns == 10
 
@@ -78,7 +78,7 @@ class TestAgentBuilder:
         agent = (AgentBuilder("prompt-agent")
             .with_llm(mock_llm)
             .with_prompt(template)
-            .build())
+            .build_sync())
 
         import asyncio
         result = asyncio.run(agent.run("Help!"))
@@ -94,7 +94,7 @@ class TestAgentBuilder:
         agent = (AgentBuilder("thinker")
             .with_llm(mock_llm)
             .with_thinking(ThinkingMode.COT)
-            .build())
+            .build_sync())
 
         assert agent.thinking_engine.mode == ThinkingMode.COT
 
@@ -121,7 +121,7 @@ class TestAgentBuilder:
             .with_prompt(PromptTemplate.preset("customer_support"))
             .with_thinking(ThinkingMode.REACT)
             .with_max_iterations(3)
-            .build())
+            .build_sync())
 
         import asyncio
         result = asyncio.run(agent.run("I want a refund"))
@@ -137,7 +137,7 @@ class TestAgentBuilder:
         agent = (AgentBuilder("compat")
             .with_llm(mock_llm)
             .with_prompt("You are helpful.")
-            .build())
+            .build_sync())
 
         import asyncio
         result = asyncio.run(agent.run("Hello"))
@@ -146,4 +146,4 @@ class TestAgentBuilder:
     def test_builder_missing_llm_raises(self):
         """未提供 LLM 客户端时抛错。"""
         with pytest.raises(ValueError, match="llm"):
-            AgentBuilder("no-llm").build()
+            AgentBuilder("no-llm").build_sync()

@@ -115,15 +115,20 @@ class AgentBuilder:
         self._max_iterations = n
         return self
 
-    def build(self) -> BaseAgent:
+    def build_sync(self) -> BaseAgent:
+        """同步版 build()，向后兼容。"""
+        import asyncio
+        return asyncio.run(self.build())
+
+    async def build(self) -> BaseAgent:
         if self._llm_client is None:
             raise ValueError("with_llm() is required. Provide an LLM client.")
 
-        # 加载 Skills
-        loader = SkillLoader(skills_dir=self._skills_dir)
+        # 加载 Skills（异步，支持 LLM 驱动的 Step 提取）
+        loader = SkillLoader(skills_dir=self._skills_dir, llm_client=self._llm_client)
         skills: list[Skill] = []
         for skill_name in self._skill_names:
-            skill = loader.load(skill_name)
+            skill = await loader.load(skill_name)
             skills.append(skill)
 
         # 如果只有 skills、没有 prompt_template，创建一个容纳它们
@@ -216,7 +221,7 @@ class _BuiltAgent(BaseAgent):
         self.memory.working.add(Message(role="assistant", content=think_result.output))
 
         # 记忆门 + 遗忘门
-        self.memory.post_turn()
+        await self.memory.post_turn()
 
         return AgentResult(
             output=think_result.output,

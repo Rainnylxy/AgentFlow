@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 from agentflow.eval.exact_match import ExactMatchEvaluator
 from agentflow.eval.trajectory import TrajectoryEvaluator
@@ -13,24 +14,24 @@ from agentflow.eval.scope_adherence import ScopeAdherenceEvaluator
 
 
 class TestExactMatch:
-    def test_perfect_match(self):
-        r = ExactMatchEvaluator().evaluate("hello", "hello")
+    async def test_perfect_match(self):
+        r = await ExactMatchEvaluator().evaluate("hello", "hello")
         assert r.score == 1.0 and r.passed
 
-    def test_mismatch(self):
-        r = ExactMatchEvaluator().evaluate("hello", "world")
+    async def test_mismatch(self):
+        r = await ExactMatchEvaluator().evaluate("hello", "world")
         assert r.score == 0.0 and not r.passed
 
-    def test_case_insensitive(self):
-        r = ExactMatchEvaluator(case_sensitive=False).evaluate("Hello", "hello")
+    async def test_case_insensitive(self):
+        r = await ExactMatchEvaluator(case_sensitive=False).evaluate("Hello", "hello")
         assert r.score == 1.0
 
-    def test_json_match(self):
-        r = ExactMatchEvaluator().evaluate('{"a":1,"b":2}', '{"b":2,"a":1}')
+    async def test_json_match(self):
+        r = await ExactMatchEvaluator().evaluate('{"a":1,"b":2}', '{"b":2,"a":1}')
         assert r.score == 1.0 and r.passed
 
-    def test_whitespace_normalization(self):
-        r = ExactMatchEvaluator(normalize_whitespace=True).evaluate("a b", "  a   b  ")
+    async def test_whitespace_normalization(self):
+        r = await ExactMatchEvaluator(normalize_whitespace=True).evaluate("a b", "  a   b  ")
         assert r.passed
 
 
@@ -212,23 +213,33 @@ class TestScopeAdherence:
 
 
 class TestEvalSuite:
-    def test_run_suite(self):
+    async def test_run_suite(self):
         e = ExactMatchEvaluator()
         suite = EvalSuite("test", [
             EvalCase("c1", "Hi", "Hi", e),
             EvalCase("c2", "Hi", "Bye", e),
         ])
-        report = suite.run(lambda x: "Hi")
+
+        async def echo(x: str) -> str:
+            return "Hi"
+
+        report = await suite.run(echo)
         assert report.passed == 1 and report.failed == 1 and report.pass_rate == 0.5
 
-    def test_empty_raises(self):
+    async def test_empty_raises(self):
         with pytest.raises(ValueError, match="No cases"):
-            EvalSuite("empty", []).run(lambda x: x)
+            async def identity(x: str) -> str:
+                return x
+            await EvalSuite("empty", []).run(identity)
 
-    def test_compare(self):
+    async def test_compare(self):
         e = ExactMatchEvaluator()
         suite = EvalSuite("cmp", [EvalCase("c", "Hi", "Hi", e)])
-        old = suite.run(lambda x: "Hi")
-        new = suite.run(lambda x: "Hi")
+
+        async def echo(x: str) -> str:
+            return "Hi"
+
+        old = await suite.run(echo)
+        new = await suite.run(echo)
         diff = suite.compare(old, new)
         assert diff["unchanged"] == 1

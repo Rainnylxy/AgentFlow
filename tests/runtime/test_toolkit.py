@@ -20,7 +20,7 @@ class TestToolDecorator:
         assert "a" in add.parameters["properties"]
         assert "b" in add.parameters["properties"]
 
-    def test_decorator_executes(self):
+    async def test_decorator_executes(self):
         """装饰后的工具仍可被调用执行。"""
         from agentflow.runtime.tool_registry import ToolRegistry
 
@@ -31,7 +31,7 @@ class TestToolDecorator:
 
         reg = ToolRegistry()
         reg.register(greet)
-        result = reg.execute("greet", {"name": "World"})
+        result = await reg.execute("greet", {"name": "World"})
         assert result.success
         assert "Hello, World!" == result.output
 
@@ -139,7 +139,7 @@ class TestToolKit:
         assert schema["function"]["name"] == "lookup"
         assert schema["function"]["description"] == "Search the knowledge base."
 
-    def test_toolkit_execute(self):
+    async def test_toolkit_execute(self):
         """ToolKit 内部委托给 ToolRegistry 执行。"""
 
         @tool
@@ -149,14 +149,14 @@ class TestToolKit:
 
         kit = ToolKit()
         kit.add(echo)
-        result = kit.execute("echo", {"text": "hello"})
+        result = await kit.execute("echo", {"text": "hello"})
         assert result.success
         assert result.output == "hello"
 
-    def test_toolkit_execute_not_found(self):
+    async def test_toolkit_execute_not_found(self):
         """执行不存在的工具返回错误。"""
         kit = ToolKit()
-        result = kit.execute("nobody", {})
+        result = await kit.execute("nobody", {})
         assert not result.success
         assert "not found" in result.error
 

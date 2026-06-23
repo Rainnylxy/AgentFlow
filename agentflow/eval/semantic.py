@@ -20,7 +20,7 @@ class SemanticEvaluator(BaseEvaluator):
     def __init__(self, threshold: float = 0.7):
         self.threshold = threshold
 
-    def evaluate(self, expected: str, actual: str) -> EvalResult:
+    async def evaluate(self, expected: str, actual: str) -> EvalResult:
         if not HAS_ST:
             return EvalResult(score=0.0, passed=False, reason="sentence-transformers not installed")
         model = _get_model()

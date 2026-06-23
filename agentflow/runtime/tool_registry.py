@@ -51,7 +51,7 @@ class ToolRegistry:
     def list_tools(self) -> list[Tool]:
         return list(self._tools.values())
 
-    def execute(self, name: str, inputs: dict) -> ToolResult:
+    async def execute(self, name: str, inputs: dict) -> ToolResult:
         tool = self._tools.get(name)
         if tool is None:
             return ToolResult(success=False, error=f"Tool '{name}' not found")
@@ -63,14 +63,10 @@ class ToolRegistry:
                 output = tool.func(**validated_inputs)
                 return ToolResult(success=True, output=str(output))
             elif tool.tool_type == ToolType.REST and tool.endpoint:
-                # 预留：同步包装异步 HTTP 调用
-                import asyncio
-                output = asyncio.run(self._execute_rest(tool, validated_inputs))
+                output = await self._execute_rest(tool, validated_inputs)
                 return ToolResult(success=True, output=output)
             elif tool.tool_type == ToolType.MCP:
-                # 预留：MCP 调用
-                import asyncio
-                output = asyncio.run(self._execute_mcp(tool, validated_inputs))
+                output = await self._execute_mcp(tool, validated_inputs)
                 return ToolResult(success=True, output=output)
             return ToolResult(success=False, error=f"Unsupported tool type: {tool.tool_type}")
         except Exception as e:

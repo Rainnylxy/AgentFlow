@@ -16,7 +16,7 @@ class TokenEfficiencyEvaluator(BaseEvaluator):
         self.baseline_tokens = baseline_tokens
         self.max_acceptable = max_acceptable
 
-    def evaluate(self, expected: str, actual: str) -> EvalResult:
+    async def evaluate(self, expected: str, actual: str) -> EvalResult:
         return EvalResult(score=0.5, passed=True,
                           reason="Use evaluate_efficiency(usage_stats) for structured scoring")
 

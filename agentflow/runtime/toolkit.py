@@ -176,8 +176,8 @@ class ToolKit:
     def list(self) -> List[Tool]:
         return self._registry.list_tools()
 
-    def execute(self, name: str, inputs: dict) -> ToolResult:
-        return self._registry.execute(name, inputs)
+    async def execute(self, name: str, inputs: dict) -> ToolResult:
+        return await self._registry.execute(name, inputs)
 
     def list_for_llm(self) -> List[dict]:
         """生成 OpenAI function-calling 格式的工具列表。"""

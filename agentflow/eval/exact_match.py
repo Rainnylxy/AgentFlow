@@ -9,7 +9,7 @@ class ExactMatchEvaluator(BaseEvaluator):
         self.case_sensitive = case_sensitive
         self.normalize_whitespace = normalize_whitespace
 
-    def evaluate(self, expected: str, actual: str) -> EvalResult:
+    async def evaluate(self, expected: str, actual: str) -> EvalResult:
         exp, act = expected, actual
         if self.normalize_whitespace:
             exp, act = " ".join(exp.split()), " ".join(act.split())

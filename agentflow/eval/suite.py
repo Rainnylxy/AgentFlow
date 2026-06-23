@@ -1,7 +1,11 @@
-"""Eval Suite Runner：批量执行 EvalCase，生成对比报告"""
+"""Eval Suite Runner：批量执行 EvalCase，生成对比报告。
+
+支持可选的 Trace 联动——在评测时自动采集执行轨迹，
+事后可按评测维度反向定位到 Trace 中的具体节点。
+"""
 
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Awaitable, Optional
 from agentflow.eval.base import BaseEvaluator, EvalResult
 
 
@@ -24,31 +28,84 @@ class SuiteReport:
 
 
 class EvalSuite:
-    def __init__(self, name: str, cases: list[EvalCase]):
+    def __init__(
+        self,
+        name: str,
+        cases: list[EvalCase],
+        trace_client: Optional[object] = None,
+    ):
         self.name = name
         self.cases = cases
+        self._trace_client = trace_client  # TraceClient 实例（可选）
 
-    def run(self, agent_fn: Callable[[str], str]) -> SuiteReport:
+    async def run(self, agent_fn: Callable[[str], Awaitable[str]]) -> SuiteReport:
+        """异步执行评测套件。
+
+        agent_fn: 接受 str 输入、返回 str 输出的异步函数（通常是 agent.run()）。
+
+        如果配置了 trace_client，每个 case 执行时会采集一条 Trace，
+        trace_id 会写入详情中，供事后 diagnose() 使用。
+        """
         if not self.cases:
             raise ValueError("No cases in suite")
         passed = 0
         failed = 0
         details = []
         for case in self.cases:
-            actual = agent_fn(case.input)
-            result = case.evaluator.evaluate(case.expected, actual)
-            details.append({
+            # 可选：为该 case 开启一条 Trace
+            trace_id = None
+            if self._trace_client:
+                trace = self._trace_client.start_trace(f"eval:{self.name}:{case.id}")
+                trace_id = trace.trace_id
+                # 为 agent 调用创建一个 span
+                span = trace.start_span("agent_run")
+                actual = await agent_fn(case.input)
+                span.end(status="success", output=actual[:200])
+                trace.end("completed")
+            else:
+                actual = await agent_fn(case.input)
+
+            result = await case.evaluator.evaluate(case.expected, actual)
+            detail = {
                 "case_id": case.id, "input": case.input,
                 "expected": case.expected, "actual": actual,
                 "score": result.score, "passed": result.passed,
                 "reason": result.reason,
-            })
+            }
+            if trace_id:
+                detail["trace_id"] = trace_id
+            details.append(detail)
+
             if result.passed:
                 passed += 1
             else:
                 failed += 1
         return SuiteReport(name=self.name, total=len(self.cases), passed=passed,
                            failed=failed, pass_rate=passed / len(self.cases), details=details)
+
+    def diagnose(self, report: SuiteReport, min_score: float = 0.5) -> list[dict]:
+        """关联分析：找出低分案例及其 Trace 信息。
+
+        向后追溯：当某个 case 得分 < min_score 时，
+        可通过 trace_id 定位到 Trace，查看具体哪个 step/tool 出了问题。
+
+        Returns:
+            [{case_id, score, reason, trace_id}, ...] 按 score 升序排列
+        """
+        low_scoring = [
+            d for d in report.details
+            if d["score"] < min_score
+        ]
+        low_scoring.sort(key=lambda d: d["score"])
+        return [
+            {
+                "case_id": d["case_id"],
+                "score": d["score"],
+                "reason": d["reason"],
+                "trace_id": d.get("trace_id", "N/A"),
+            }
+            for d in low_scoring
+        ]
 
     def compare(self, old: SuiteReport, new: SuiteReport) -> dict:
         old_map = {d["case_id"]: d for d in old.details}

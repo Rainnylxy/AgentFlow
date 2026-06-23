@@ -45,21 +45,21 @@ class TestToolRegistry:
         with pytest.raises(ValueError, match="already registered"):
             reg.register(Tool(name="x", description="d", tool_type=ToolType.LOCAL, func=lambda x: x))
 
-    def test_execute_local(self):
+    async def test_execute_local(self):
         reg = ToolRegistry()
         reg.register(Tool(name="greet", description="Greet", tool_type=ToolType.LOCAL,
                           func=lambda name: f"Hello, {name}!"))
-        result = reg.execute("greet", {"name": "World"})
+        result = await reg.execute("greet", {"name": "World"})
         assert result.success is True
         assert result.output == "Hello, World!"
 
-    def test_execute_not_found(self):
+    async def test_execute_not_found(self):
         reg = ToolRegistry()
-        result = reg.execute("ghost", {})
+        result = await reg.execute("ghost", {})
         assert result.success is False
         assert "not found" in result.error
 
-    def test_execute_with_pydantic_validation(self):
+    async def test_execute_with_pydantic_validation(self):
         from pydantic import BaseModel, Field
 
         class AddParams(BaseModel):
@@ -70,9 +70,9 @@ class TestToolRegistry:
         reg.register(Tool(name="add", description="Add numbers", tool_type=ToolType.LOCAL,
                           func=lambda a, b: a + b,
                           params_model=AddParams))
-        result = reg.execute("add", {"a": 1, "b": 2})
+        result = await reg.execute("add", {"a": 1, "b": 2})
         assert result.success is True
         assert result.output == "3"
 
-        result = reg.execute("add", {"a": "not_a_number", "b": 2})
+        result = await reg.execute("add", {"a": "not_a_number", "b": 2})
         assert result.success is False
