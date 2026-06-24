@@ -22,10 +22,11 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Awaitable, Optional
+from typing import Any, Callable, Awaitable, Optional, Union
 
 from agentflow.dsl.types import Workflow, Node, NodeKind, FallbackPolicy
 from agentflow.runtime.message_bus import MessageBus, AgentMessage
+from agentflow.runtime.hooks import ExecutionHooks, HookContext, StreamEvent, StreamCallback
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ class ExecutionTrace:
 # DAG 执行器
 # ---------------------------------------------------------------------------
 
-AgentFn = Callable[[str, dict], Awaitable[str]]
+AgentFn = Callable[[str, dict, Optional[StreamCallback]], Awaitable[str]]
 ToolFn = Callable[[str, dict], Awaitable[str]]
 HumanFn = Callable[[str, dict], Awaitable[str]]
 
@@ -86,13 +87,29 @@ class DAGExecutor:
         tool_fn: ToolFn | None = None,
         human_fn: HumanFn | None = None,
         message_bus: MessageBus | None = None,
+        hooks: ExecutionHooks | None = None,
+        stream: StreamCallback | None = None,
     ) -> "tuple[dict[str, NodeResult], ExecutionTrace]":
         """执行整个 Workflow DAG。
 
-        message_bus: 可选的消息总线，Agent 通过它相互通信。
-                     不传则自动创建一个（结果可从 trace 获取）。
+        hooks: 生命周期钩子，在节点/工具/组的关键节点回调。
+        stream: 流式回调，agent_fn 内部的 emit 事件会传递到这里。
         """
         from agentflow.dsl.graph import parallel_groups
+
+        hooks = hooks or ExecutionHooks()
+        hctx = HookContext(workflow_name=workflow.name)
+
+        # 包装 stream：同时路由到 hooks.on_stream 和外部回调
+        async def _stream_wrapper(event: StreamEvent) -> None:
+            await hooks.on_stream(event, hctx)
+            if stream:
+                await stream(event)
+
+        # 统一使用 _stream_wrapper，agent_fn 收到的 emit 就是它
+        _emit: StreamCallback | None = _stream_wrapper if (stream or type(hooks) != ExecutionHooks) else None
+
+        await hooks.on_workflow_start(workflow, hctx)
 
         t0 = time.monotonic()
         groups = parallel_groups(workflow)
@@ -102,6 +119,9 @@ class DAGExecutor:
         for group in groups:
             if not group:
                 continue
+
+            hctx.group = group
+            await hooks.on_group_start(group, hctx)
 
             # 评估边条件——当前层哪些节点应跳过
             active = []
@@ -118,12 +138,14 @@ class DAGExecutor:
                 group_results = await asyncio.gather(*[
                     self._execute_node(
                         workflow, nid, all_results,
-                        agent_fn, tool_fn, human_fn, bus,
+                        agent_fn, tool_fn, human_fn, bus, hooks, _emit, hctx,
                     )
                     for nid in active
                 ])
                 for nr in group_results:
                     all_results[nr.node_id] = nr
+
+            await hooks.on_group_end(group, hctx)
 
         t1 = time.monotonic()
         trace = ExecutionTrace(
@@ -132,6 +154,7 @@ class DAGExecutor:
             node_results=all_results,
             groups=groups,
         )
+        await hooks.on_workflow_end(workflow, trace, hctx)
         return all_results, trace
 
     # ------------------------------------------------------------------
@@ -221,24 +244,34 @@ class DAGExecutor:
         tool_fn: ToolFn | None,
         human_fn: HumanFn | None,
         bus: MessageBus,
+        hooks: ExecutionHooks,
+        stream: StreamCallback | None,
+        hctx: HookContext,
     ) -> NodeResult:
         node = self._get_node(workflow, node_id)
         if node is None:
             return NodeResult(node_id=node_id, success=False, error=f"Node not found")
+
+        hctx.node_id = node_id
+        hctx.node_kind = node.kind.value
+        await hooks.on_node_start(node, hctx)
 
         # 收集发给该节点的未读消息
         incoming = bus.receive(node_id)
 
         # 循环节点 —— wrapper
         if node.loop:
-            return await self._execute_with_loop(
+            result = await self._execute_with_loop(
                 node, workflow, results_so_far,
-                agent_fn, tool_fn, human_fn, bus, incoming,
+                agent_fn, tool_fn, human_fn, bus, incoming, hooks, stream, hctx,
+            )
+        else:
+            result = await self._execute_once(
+                node, workflow, results_so_far, agent_fn, tool_fn, human_fn, bus, incoming, hooks, stream, hctx,
             )
 
-        return await self._execute_once(
-            node, workflow, results_so_far, agent_fn, tool_fn, human_fn, bus, incoming,
-        )
+        await hooks.on_node_end(node, result, hctx)
+        return result
 
     async def _execute_once(
         self,
@@ -250,6 +283,9 @@ class DAGExecutor:
         human_fn: HumanFn | None,
         bus: MessageBus,
         incoming: list[AgentMessage],
+        hooks: ExecutionHooks,
+        stream: StreamCallback | None,
+        hctx: HookContext,
     ) -> NodeResult:
         """单次执行一个节点（不含循环）。"""
         timeout_ms = node.timeout_ms or self.default_timeout_ms
@@ -260,8 +296,10 @@ class DAGExecutor:
             t0 = time.monotonic()
             try:
                 ctx = self._build_context(node, workflow, results_so_far, incoming, bus)
+                # 注入 hook 共享上下文
+                ctx["_hook_shared"] = hctx.shared
                 output = await asyncio.wait_for(
-                    self._dispatch(node, ctx, agent_fn, tool_fn, human_fn),
+                    self._dispatch(node, ctx, agent_fn, tool_fn, human_fn, hooks, stream, hctx),
                     timeout=timeout_ms / 1000.0,
                 )
                 return NodeResult(
@@ -289,28 +327,38 @@ class DAGExecutor:
         agent_fn: AgentFn | None,
         tool_fn: ToolFn | None,
         human_fn: HumanFn | None,
+        hooks: ExecutionHooks,
+        stream: StreamCallback | None,
+        hctx: HookContext,
     ) -> str:
         """根据 NodeKind 分发到正确的执行函数。
 
-        ctx 包含: previous_outputs, incoming_messages, message_bus
+        ctx 包含: previous_outputs, incoming_messages, message_bus, _hook_shared
         """
         if node.kind == NodeKind.AGENT:
             if agent_fn is None:
                 raise RuntimeError(f"AGENT node '{node.id}': agent_fn not provided")
-            return await agent_fn(node.id, ctx)
+            try:
+                return await agent_fn(node.id, ctx, stream)
+            except TypeError:
+                # 向后兼容：agent_fn 如果不接受第三个参数，回退到两参数版本
+                return await agent_fn(node.id, ctx)  # type: ignore[call-arg]
 
         elif node.kind == NodeKind.TOOL:
             if tool_fn is None:
                 raise RuntimeError(f"TOOL node '{node.id}': tool_fn not provided")
             if node.tool is None:
                 raise RuntimeError(f"TOOL node '{node.id}': tool config missing")
-            return await tool_fn(node.tool.name, node.tool.inputs)
+            await hooks.on_tool_call(node.tool.name, node.tool.inputs, hctx)
+            result = await tool_fn(node.tool.name, node.tool.inputs)
+            await hooks.on_tool_result(node.tool.name, result, hctx)
+            return result
 
         elif node.kind == NodeKind.HUMAN:
             return await self._execute_human(node, ctx, human_fn)
 
         elif node.kind == NodeKind.SUBGRAPH:
-            return await self._execute_subgraph(node, ctx, agent_fn, tool_fn, human_fn)
+            return await self._execute_subgraph(node, ctx, agent_fn, tool_fn, human_fn, hooks, stream, hctx)
 
         raise RuntimeError(f"Unknown node kind: {node.kind}")
 
@@ -321,6 +369,9 @@ class DAGExecutor:
         agent_fn: AgentFn | None,
         tool_fn: ToolFn | None,
         human_fn: HumanFn | None,
+        hooks: ExecutionHooks,
+        stream: StreamCallback | None,
+        hctx: HookContext,
     ) -> str:
         """递归执行子 Workflow。
 
@@ -362,6 +413,8 @@ class DAGExecutor:
             tool_fn=tool_fn,
             human_fn=human_fn,
             message_bus=bus,
+            hooks=hooks,
+            stream=stream,
         )
 
         # 返回子 Workflow 最后一个节点的输出
@@ -413,6 +466,9 @@ class DAGExecutor:
         human_fn: HumanFn | None,
         bus: MessageBus,
         incoming: list[AgentMessage],
+        hooks: ExecutionHooks,
+        stream: StreamCallback | None,
+        hctx: HookContext,
     ) -> NodeResult:
         """循环执行节点直到条件满足或达到上限。"""
         assert node.loop is not None
@@ -423,6 +479,7 @@ class DAGExecutor:
         for i in range(max_loop):
             result = await self._execute_once(
                 node, workflow, results_so_far, agent_fn, tool_fn, human_fn, bus, incoming,
+                hooks, stream, hctx,
             )
             outputs.append(result.output if result.success else {"error": result.error})
 
