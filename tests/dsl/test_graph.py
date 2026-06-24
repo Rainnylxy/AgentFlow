@@ -1,4 +1,4 @@
-from agentflow.dsl.types import Node, Edge, Workflow, NodeType
+from agentflow.dsl.types import Node, Edge, Workflow, NodeKind
 from agentflow.dsl.graph import topological_sort, parallel_groups
 
 
@@ -8,9 +8,9 @@ class TestTopologicalSort:
         wf = Workflow(
             name="linear",
             nodes=[
-                Node(id="a", node_type=NodeType.AGENT),
-                Node(id="b", node_type=NodeType.AGENT),
-                Node(id="c", node_type=NodeType.AGENT),
+                Node(id="a", kind=NodeKind.AGENT),
+                Node(id="b", kind=NodeKind.AGENT),
+                Node(id="c", kind=NodeKind.AGENT),
             ],
             edges=[
                 Edge(from_node="a", to_node="b"),
@@ -25,10 +25,10 @@ class TestTopologicalSort:
         wf = Workflow(
             name="diamond",
             nodes=[
-                Node(id="entry", node_type=NodeType.AGENT),
-                Node(id="left", node_type=NodeType.AGENT),
-                Node(id="right", node_type=NodeType.AGENT),
-                Node(id="end", node_type=NodeType.AGENT),
+                Node(id="entry", kind=NodeKind.AGENT),
+                Node(id="left", kind=NodeKind.AGENT),
+                Node(id="right", kind=NodeKind.AGENT),
+                Node(id="end", kind=NodeKind.AGENT),
             ],
             edges=[
                 Edge(from_node="entry", to_node="left"),
@@ -47,7 +47,7 @@ class TestTopologicalSort:
         """单节点 Workflow：只有一个元素。"""
         wf = Workflow(
             name="singleton",
-            nodes=[Node(id="a", node_type=NodeType.AGENT)],
+            nodes=[Node(id="a", kind=NodeKind.AGENT)],
             edges=[],
         )
         order = topological_sort(wf)
@@ -60,8 +60,8 @@ class TestParallelGroups:
         wf = Workflow(
             name="linear",
             nodes=[
-                Node(id="a", node_type=NodeType.AGENT),
-                Node(id="b", node_type=NodeType.AGENT),
+                Node(id="a", kind=NodeKind.AGENT),
+                Node(id="b", kind=NodeKind.AGENT),
             ],
             edges=[Edge(from_node="a", to_node="b")],
         )
@@ -73,10 +73,10 @@ class TestParallelGroups:
         wf = Workflow(
             name="diamond",
             nodes=[
-                Node(id="entry", node_type=NodeType.AGENT),
-                Node(id="left", node_type=NodeType.AGENT),
-                Node(id="right", node_type=NodeType.AGENT),
-                Node(id="end", node_type=NodeType.AGENT),
+                Node(id="entry", kind=NodeKind.AGENT),
+                Node(id="left", kind=NodeKind.AGENT),
+                Node(id="right", kind=NodeKind.AGENT),
+                Node(id="end", kind=NodeKind.AGENT),
             ],
             edges=[
                 Edge(from_node="entry", to_node="left"),
@@ -95,11 +95,11 @@ class TestParallelGroups:
         wf = Workflow(
             name="fan-out",
             nodes=[
-                Node(id="entry", node_type=NodeType.AGENT),
-                Node(id="a", node_type=NodeType.AGENT),
-                Node(id="b", node_type=NodeType.AGENT),
-                Node(id="c", node_type=NodeType.AGENT),
-                Node(id="end", node_type=NodeType.AGENT),
+                Node(id="entry", kind=NodeKind.AGENT),
+                Node(id="a", kind=NodeKind.AGENT),
+                Node(id="b", kind=NodeKind.AGENT),
+                Node(id="c", kind=NodeKind.AGENT),
+                Node(id="end", kind=NodeKind.AGENT),
             ],
             edges=[
                 Edge(from_node="entry", to_node="a"),

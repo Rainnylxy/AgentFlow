@@ -1,4 +1,4 @@
-from agentflow.dsl.types import Node, Edge, Workflow, NodeType
+from agentflow.dsl.types import Node, Edge, Workflow, NodeKind
 from agentflow.dsl.visualizer import to_mermaid
 
 
@@ -8,9 +8,9 @@ class TestToMermaid:
         wf = Workflow(
             name="Linear Pipeline",
             nodes=[
-                Node(id="entry", node_type=NodeType.AGENT),
-                Node(id="middle", node_type=NodeType.AGENT),
-                Node(id="end", node_type=NodeType.AGENT),
+                Node(id="entry", kind=NodeKind.AGENT),
+                Node(id="middle", kind=NodeKind.AGENT),
+                Node(id="end", kind=NodeKind.AGENT),
             ],
             edges=[
                 Edge(from_node="entry", to_node="middle"),
@@ -27,9 +27,9 @@ class TestToMermaid:
         wf = Workflow(
             name="Conditional",
             nodes=[
-                Node(id="router", node_type=NodeType.CONDITION),
-                Node(id="a", node_type=NodeType.AGENT),
-                Node(id="b", node_type=NodeType.AGENT),
+                Node(id="router", kind=NodeKind.AGENT),
+                Node(id="a", kind=NodeKind.AGENT),
+                Node(id="b", kind=NodeKind.AGENT),
             ],
             edges=[
                 Edge(from_node="router", to_node="a", condition="{{ score > 0.5 }}"),
@@ -41,17 +41,24 @@ class TestToMermaid:
         assert "score <= 0.5" in result
 
     def test_different_node_types_have_different_shapes(self):
-        """不同 NodeType 用不同形状区分。"""
+        """不同 NodeKind 用不同形状区分。"""
+        from agentflow.dsl.types import ToolConfig, HumanConfig
         wf = Workflow(
             name="Shapes",
             nodes=[
-                Node(id="agent_node", node_type=NodeType.AGENT),
-                Node(id="condition_node", node_type=NodeType.CONDITION),
+                Node(id="agent_node", kind=NodeKind.AGENT),
+                Node(id="tool_node", kind=NodeKind.TOOL, tool=ToolConfig(name="echo")),
+                Node(id="human_node", kind=NodeKind.HUMAN, human=HumanConfig(prompt="OK?")),
+                Node(id="sub_node", kind=NodeKind.SUBGRAPH, subgraph="child"),
             ],
             edges=[],
         )
         result = to_mermaid(wf)
-        # Agent 是矩形 [ ]
+        # Agent 矩形 [ ]
         assert "agent_node[" in result
-        # Condition 是菱形 { }
-        assert "condition_node{" in result
+        # Tool 梯形 [/ \]
+        assert "tool_node[/" in result
+        # Human 斜边 [/ /]
+        assert "human_node[/" in result
+        # Subgraph 子程序 [[ ]]
+        assert "sub_node[[" in result

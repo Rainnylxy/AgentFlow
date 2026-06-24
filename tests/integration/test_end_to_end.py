@@ -7,7 +7,7 @@ import asyncio
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 
-from agentflow.dsl.types import Node, Edge, Workflow, NodeType
+from agentflow.dsl.types import Node, Edge, Workflow, NodeKind
 from agentflow.dsl.validator import validate_dag
 from agentflow.dsl.graph import topological_sort, parallel_groups
 from agentflow.dsl.visualizer import to_mermaid
@@ -33,14 +33,10 @@ class TestAgentFlowEndToEnd:
             name="Order Processing Pipeline",
             description="Handle customer orders with fraud check and inventory",
             nodes=[
-                Node(id="receive_order", node_type=NodeType.AGENT,
-                     config={"model": "gpt-4o"}, timeout_ms=30000),
-                Node(id="fraud_check", node_type=NodeType.AGENT,
-                     config={"model": "gpt-4o"}, retry_max=2),
-                Node(id="inventory_check", node_type=NodeType.AGENT,
-                     config={"model": "gpt-4o"}, retry_max=1),
-                Node(id="fulfill", node_type=NodeType.AGENT,
-                     config={"model": "gpt-4o"}),
+                Node(id="receive_order", kind=NodeKind.AGENT, timeout_ms=30000),
+                Node(id="fraud_check", kind=NodeKind.AGENT, retry_max=2),
+                Node(id="inventory_check", kind=NodeKind.AGENT, retry_max=1),
+                Node(id="fulfill", kind=NodeKind.AGENT),
             ],
             edges=[
                 Edge(from_node="receive_order", to_node="fraud_check"),
@@ -85,7 +81,7 @@ class TestAgentFlowEndToEnd:
         """Mermaid 输出可直接嵌入 Markdown。"""
         wf = Workflow(
             name="Simple Pipeline",
-            nodes=[Node(id="a", node_type=NodeType.AGENT)],
+            nodes=[Node(id="a", kind=NodeKind.AGENT)],
             edges=[],
         )
         mermaid = to_mermaid(wf)

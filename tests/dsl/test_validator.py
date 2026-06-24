@@ -1,5 +1,5 @@
 import pytest
-from agentflow.dsl.types import Node, Edge, Workflow, NodeType
+from agentflow.dsl.types import Node, Edge, Workflow, NodeKind
 from agentflow.dsl.validator import validate_dag, DAGValidationError
 
 
@@ -9,9 +9,9 @@ class TestValidateDAG:
         wf = Workflow(
             name="valid-linear",
             nodes=[
-                Node(id="entry", node_type=NodeType.AGENT),
-                Node(id="a", node_type=NodeType.AGENT),
-                Node(id="b", node_type=NodeType.AGENT),
+                Node(id="entry", kind=NodeKind.AGENT),
+                Node(id="a", kind=NodeKind.AGENT),
+                Node(id="b", kind=NodeKind.AGENT),
             ],
             edges=[
                 Edge(from_node="entry", to_node="a"),
@@ -25,10 +25,10 @@ class TestValidateDAG:
         wf = Workflow(
             name="diamond",
             nodes=[
-                Node(id="entry", node_type=NodeType.AGENT),
-                Node(id="left", node_type=NodeType.AGENT),
-                Node(id="right", node_type=NodeType.AGENT),
-                Node(id="end", node_type=NodeType.AGENT),
+                Node(id="entry", kind=NodeKind.AGENT),
+                Node(id="left", kind=NodeKind.AGENT),
+                Node(id="right", kind=NodeKind.AGENT),
+                Node(id="end", kind=NodeKind.AGENT),
             ],
             edges=[
                 Edge(from_node="entry", to_node="left"),
@@ -44,8 +44,8 @@ class TestValidateDAG:
         wf = Workflow(
             name="cyclic",
             nodes=[
-                Node(id="a", node_type=NodeType.AGENT),
-                Node(id="b", node_type=NodeType.AGENT),
+                Node(id="a", kind=NodeKind.AGENT),
+                Node(id="b", kind=NodeKind.AGENT),
             ],
             edges=[
                 Edge(from_node="a", to_node="b"),
@@ -60,9 +60,9 @@ class TestValidateDAG:
         wf = Workflow(
             name="triple-cycle",
             nodes=[
-                Node(id="a", node_type=NodeType.AGENT),
-                Node(id="b", node_type=NodeType.AGENT),
-                Node(id="c", node_type=NodeType.AGENT),
+                Node(id="a", kind=NodeKind.AGENT),
+                Node(id="b", kind=NodeKind.AGENT),
+                Node(id="c", kind=NodeKind.AGENT),
             ],
             edges=[
                 Edge(from_node="a", to_node="b"),
@@ -78,8 +78,8 @@ class TestValidateDAG:
         wf = Workflow(
             name="disconnected",
             nodes=[
-                Node(id="a", node_type=NodeType.AGENT),
-                Node(id="b", node_type=NodeType.AGENT),
+                Node(id="a", kind=NodeKind.AGENT),
+                Node(id="b", kind=NodeKind.AGENT),
             ],
             edges=[],
         )
@@ -91,9 +91,9 @@ class TestValidateDAG:
         wf = Workflow(
             name="all-disconnected",
             nodes=[
-                Node(id="a", node_type=NodeType.AGENT),
-                Node(id="b", node_type=NodeType.AGENT),
-                Node(id="c", node_type=NodeType.AGENT),
+                Node(id="a", kind=NodeKind.AGENT),
+                Node(id="b", kind=NodeKind.AGENT),
+                Node(id="c", kind=NodeKind.AGENT),
             ],
             edges=[],
         )
