@@ -228,12 +228,13 @@ class DAGExecutor:
             )
 
         return await self._execute_once(
-            node, results_so_far, agent_fn, tool_fn, human_fn, bus, incoming,
+            node, workflow, results_so_far, agent_fn, tool_fn, human_fn, bus, incoming,
         )
 
     async def _execute_once(
         self,
         node: Node,
+        workflow: Workflow,
         results_so_far: dict[str, NodeResult],
         agent_fn: AgentFn | None,
         tool_fn: ToolFn | None,
@@ -249,11 +250,7 @@ class DAGExecutor:
         for attempt in range(max_retries + 1):
             t0 = time.monotonic()
             try:
-                ctx = {
-                    "previous_outputs": results_so_far,
-                    "incoming_messages": incoming,
-                    "message_bus": bus,
-                }
+                ctx = self._build_context(node, workflow, results_so_far, incoming, bus)
                 output = await asyncio.wait_for(
                     self._dispatch(node, ctx, agent_fn, tool_fn, human_fn),
                     timeout=timeout_ms / 1000.0,
@@ -330,7 +327,7 @@ class DAGExecutor:
 
         for i in range(max_loop):
             result = await self._execute_once(
-                node, results_so_far, agent_fn, tool_fn, human_fn, bus, incoming,
+                node, workflow, results_so_far, agent_fn, tool_fn, human_fn, bus, incoming,
             )
             outputs.append(result.output if result.success else {"error": result.error})
 
@@ -376,6 +373,53 @@ class DAGExecutor:
             return NodeResult(node_id=node.id, output={"fallback_to": node.fallback_node_id}, success=True)
         else:
             return NodeResult(node_id=node.id, success=False, error=error)
+
+    # ------------------------------------------------------------------
+    # 记忆作用域 → context 构建
+    # ------------------------------------------------------------------
+
+    def _build_context(
+        self,
+        node: Node,
+        workflow: Workflow,
+        results_so_far: dict[str, NodeResult],
+        incoming: list[AgentMessage],
+        bus: MessageBus,
+    ) -> dict:
+        """根据节点 memory_scope 构建 context。
+
+        workflow  — 看全局，所有前驱输出 + 消息 + bus
+        inherit  — 只看直接上游节点的输出（默认）
+        none     — 不看任何记忆，只有 incoming_messages + bus
+        """
+        scope = node.agent.memory_scope if node.agent else "inherit"
+
+        base = {
+            "incoming_messages": incoming,
+            "message_bus": bus,
+        }
+
+        if scope == "none":
+            base["previous_outputs"] = {}
+            return base
+
+        if scope == "workflow":
+            # 全局：所有已完成的节点输出都可见
+            base["previous_outputs"] = results_so_far
+            return base
+
+        # scope == "inherit"（默认）：只看直接上游
+        upstream_ids = self._get_upstream_ids(node.id, workflow)
+        base["previous_outputs"] = {
+            uid: results_so_far[uid]
+            for uid in upstream_ids
+            if uid in results_so_far
+        }
+        return base
+
+    def _get_upstream_ids(self, node_id: str, workflow: Workflow) -> set[str]:
+        """返回 node_id 的所有直接上游节点 id。"""
+        return {e.from_node for e in workflow.edges if e.to_node == node_id}
 
     # ------------------------------------------------------------------
     # 辅助

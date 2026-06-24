@@ -47,6 +47,7 @@ def _node_to_dict(n: Node) -> dict:
             "tools": n.agent.tools,
             "thinking": n.agent.thinking,
             "memory": n.agent.memory,
+            "memory_scope": n.agent.memory_scope,
         }
     elif n.kind == NodeKind.TOOL and n.tool:
         d["tool"] = {"name": n.tool.name, "inputs": n.tool.inputs}
@@ -112,6 +113,7 @@ def _agent_from_dict(d: dict) -> AgentConfig:
         tools=d.get("tools", []),
         thinking=d.get("thinking", "react"),
         memory=d.get("memory", "standard"),
+        memory_scope=d.get("memory_scope", "inherit"),
     )
 
 

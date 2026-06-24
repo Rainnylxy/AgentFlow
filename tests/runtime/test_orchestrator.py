@@ -314,3 +314,93 @@ class TestDAGExecutorIntegration:
         assert results["step1"].success
         assert results["step2"].success
         assert mock_agent.run.call_count == 2
+
+
+class TestMemoryScope:
+    """记忆作用域：workflow / inherit / none"""
+
+    @pytest.fixture
+    def diamond_wf(self):
+        from agentflow.dsl.types import AgentConfig
+        return Workflow(
+            name="scope-test",
+            nodes=[
+                Node(id="entry", kind=NodeKind.AGENT,
+                     agent=AgentConfig(memory_scope="inherit")),
+                Node(id="left", kind=NodeKind.AGENT,
+                     agent=AgentConfig(memory_scope="inherit")),
+                Node(id="right", kind=NodeKind.AGENT,
+                     agent=AgentConfig(memory_scope="inherit")),
+                Node(id="end", kind=NodeKind.AGENT,
+                     agent=AgentConfig(memory_scope="workflow")),
+            ],
+            edges=[
+                Edge(from_node="entry", to_node="left"),
+                Edge(from_node="entry", to_node="right"),
+                Edge(from_node="left", to_node="end"),
+                Edge(from_node="right", to_node="end"),
+            ],
+        )
+
+    async def test_inherit_only_sees_upstream(self, diamond_wf):
+        """inherit 作用域：只看直接上游，不看到旁路。"""
+
+        async def agent_fn(node_id, ctx):
+            prev = ctx.get("previous_outputs", {})
+            seen = list(prev.keys())
+            return f"{node_id} saw: {seen}"
+
+        executor = DAGExecutor()
+        results, _ = await executor.execute(diamond_wf, agent_fn=agent_fn)
+
+        # entry 没有上游
+        assert "[]" in results["entry"].output or "saw:" in results["entry"].output
+
+        # left / right 只看到 entry（直接上游），看不到彼此
+        left_out = results["left"].output
+        assert "entry" in left_out
+        assert "right" not in left_out  # 旁路不可见
+
+        right_out = results["right"].output
+        assert "entry" in right_out
+        assert "left" not in right_out   # 旁路不可见
+
+    async def test_workflow_sees_all(self, diamond_wf):
+        """workflow 作用域：看到所有已完成节点的输出。"""
+
+        async def agent_fn(node_id, ctx):
+            prev = ctx.get("previous_outputs", {})
+            seen = sorted(prev.keys())
+            return f"{node_id} saw: {seen}"
+
+        executor = DAGExecutor()
+        results, _ = await executor.execute(diamond_wf, agent_fn=agent_fn)
+
+        # end 是 workflow 作用域，应看到 entry + left + right
+        assert "entry" in results["end"].output
+        assert "left" in results["end"].output
+        assert "right" in results["end"].output
+
+    async def test_none_scope_sees_nothing(self):
+        """none 作用域：不传任何 previous_outputs。"""
+        from agentflow.dsl.types import AgentConfig
+
+        wf = Workflow(
+            name="none-test",
+            nodes=[
+                Node(id="a", kind=NodeKind.AGENT,
+                     agent=AgentConfig(memory_scope="inherit")),
+                Node(id="b", kind=NodeKind.AGENT,
+                     agent=AgentConfig(memory_scope="none")),
+            ],
+            edges=[Edge(from_node="a", to_node="b")],
+        )
+
+        async def agent_fn(node_id, ctx):
+            prev = ctx.get("previous_outputs", {})
+            return f"{node_id} saw {len(prev)} outputs"
+
+        executor = DAGExecutor()
+        results, _ = await executor.execute(wf, agent_fn=agent_fn)
+
+        assert "saw 0 outputs" in results["b"].output

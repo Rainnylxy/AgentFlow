@@ -49,6 +49,7 @@ class AgentConfig:
     tools: list[str] = field(default_factory=list)   # 工具名列表
     thinking: str = "react"                   # react | cot | plan_execute | adaptive
     memory: str = "standard"                  # light | standard | deep
+    memory_scope: str = "inherit"             # workflow | inherit | none
 
 
 @dataclass
