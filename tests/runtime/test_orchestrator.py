@@ -404,3 +404,170 @@ class TestMemoryScope:
         results, _ = await executor.execute(wf, agent_fn=agent_fn)
 
         assert "saw 0 outputs" in results["b"].output
+
+
+class TestSubgraphExecution:
+    """SUBGRAPH 节点 — 递归执行子 Workflow"""
+
+    async def test_subgraph_runs_child_workflow(self):
+        """SUBGRAPH 节点递归执行注册的子 Workflow。"""
+        child = Workflow(
+            name="child_wf",
+            nodes=[
+                Node(id="c1", kind=NodeKind.AGENT),
+                Node(id="c2", kind=NodeKind.AGENT),
+            ],
+            edges=[Edge(from_node="c1", to_node="c2")],
+        )
+
+        parent = Workflow(
+            name="parent_wf",
+            nodes=[
+                Node(id="start", kind=NodeKind.AGENT),
+                Node(id="sub", kind=NodeKind.SUBGRAPH, subgraph="child_wf"),
+                Node(id="finish", kind=NodeKind.AGENT),
+            ],
+            edges=[
+                Edge(from_node="start", to_node="sub"),
+                Edge(from_node="sub", to_node="finish"),
+            ],
+        )
+
+        async def agent_fn(node_id, ctx):
+            prev = ctx.get("previous_outputs", {})
+            return f"agent:{node_id} prev:{sorted(prev.keys())}"
+
+        executor = DAGExecutor()
+        executor.register_workflow(child)
+
+        results, trace = await executor.execute(parent, agent_fn=agent_fn)
+
+        # 父节点正常执行
+        assert results["start"].success
+        assert results["sub"].success
+        assert results["finish"].success
+
+        # sub 的输出来自子 workflow 的最终节点
+        assert "agent:c2" in results["sub"].output
+
+    async def test_subgraph_receives_parent_context(self):
+        """子 Workflow 的入口节点能看到父 context。"""
+        child = Workflow(
+            name="inherit_ctx",
+            nodes=[Node(id="c_start", kind=NodeKind.AGENT)],
+            edges=[],
+        )
+
+        parent = Workflow(
+            name="parent_ctx",
+            nodes=[
+                Node(id="p1", kind=NodeKind.AGENT),
+                Node(id="sub", kind=NodeKind.SUBGRAPH, subgraph="inherit_ctx"),
+            ],
+            edges=[Edge(from_node="p1", to_node="sub")],
+        )
+
+        async def agent_fn(node_id, ctx):
+            prev = ctx.get("previous_outputs", {})
+            return f"node:{node_id} parent_visible:{'p1' in prev}"
+
+        executor = DAGExecutor()
+        executor.register_workflow(child)
+        results, _ = await executor.execute(parent, agent_fn=agent_fn)
+
+        # 子节点应该能看到父 context 中的 p1
+        assert "parent_visible:True" in results["sub"].output
+
+    async def test_subgraph_not_found_raises(self):
+        """引用未注册的 subgraph → 报错。"""
+        wf = Workflow(
+            name="bad_parent",
+            nodes=[Node(id="sub", kind=NodeKind.SUBGRAPH, subgraph="no_such_wf")],
+            edges=[],
+        )
+
+        executor = DAGExecutor()
+        async def fn(nid, ctx): return "ok"
+        results, _ = await executor.execute(wf, agent_fn=fn)
+
+        assert not results["sub"].success
+        assert "unknown workflow" in results["sub"].error.lower()
+
+
+class TestHumanExecution:
+    """HUMAN 节点 — 人工确认 + 超时 fallback"""
+
+    async def test_human_with_callback(self):
+        """提供 human_fn → 正常获取人工输入。"""
+        from agentflow.dsl.types import HumanConfig
+
+        async def mock_human(node_id, ctx):
+            return "approved by human"
+
+        wf = Workflow(
+            name="human-test",
+            nodes=[Node(
+                id="approval",
+                kind=NodeKind.HUMAN,
+                human=HumanConfig(prompt="Approve?", timeout_sec=10),
+            )],
+            edges=[],
+        )
+
+        executor = DAGExecutor()
+        results, _ = await executor.execute(wf, human_fn=mock_human)
+
+        assert results["approval"].success
+        assert results["approval"].output == "approved by human"
+
+    async def test_human_no_callback_uses_default(self):
+        """没有 human_fn → 自动返回默认值（自动审批）。"""
+        from agentflow.dsl.types import HumanConfig
+
+        wf = Workflow(
+            name="auto-approve",
+            nodes=[Node(
+                id="approval",
+                kind=NodeKind.HUMAN,
+                human=HumanConfig(
+                    prompt="Approve?",
+                    default_response="auto-approved: proceed",
+                ),
+            )],
+            edges=[],
+        )
+
+        executor = DAGExecutor()
+        # 不传 human_fn
+        results, _ = await executor.execute(wf)
+
+        assert results["approval"].success
+        assert "approved" in results["approval"].output.lower()
+
+    async def test_human_timeout_fallback(self):
+        """human_fn 超时 → 返回 default_response。"""
+        from agentflow.dsl.types import HumanConfig
+
+        async def slow_human(node_id, ctx):
+            # human_fn 自己处理超时，或者编排器 catch TimeoutError
+            raise asyncio.TimeoutError("human did not respond")
+
+        wf = Workflow(
+            name="timeout-human",
+            nodes=[Node(
+                id="approval",
+                kind=NodeKind.HUMAN,
+                human=HumanConfig(
+                    prompt="Hurry up!",
+                    timeout_sec=1,
+                    default_response="timeout: auto-rejected",
+                ),
+            )],
+            edges=[],
+        )
+
+        executor = DAGExecutor()
+        results, _ = await executor.execute(wf, human_fn=slow_human)
+
+        assert results["approval"].success
+        assert "timeout" in results["approval"].output.lower()

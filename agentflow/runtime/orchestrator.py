@@ -67,8 +67,17 @@ HumanFn = Callable[[str, dict], Awaitable[str]]
 class DAGExecutor:
     """纯 Python 异步 DAG 编排引擎。"""
 
-    def __init__(self, default_timeout_ms: int = 120_000):
+    def __init__(
+        self,
+        default_timeout_ms: int = 120_000,
+        workflows: dict[str, Workflow] | None = None,
+    ):
         self.default_timeout_ms = default_timeout_ms
+        self._workflows: dict[str, Workflow] = workflows or {}  # subgraph 注册表
+
+    def register_workflow(self, wf: Workflow) -> None:
+        """注册一个可被 SUBGRAPH 节点引用的 Workflow。"""
+        self._workflows[wf.name] = wf
 
     async def execute(
         self,
@@ -298,16 +307,102 @@ class DAGExecutor:
             return await tool_fn(node.tool.name, node.tool.inputs)
 
         elif node.kind == NodeKind.HUMAN:
-            if human_fn is None:
-                raise RuntimeError(f"HUMAN node '{node.id}': human_fn not provided")
-            return await human_fn(node.id, {"prompt": node.human.prompt if node.human else "", **ctx})
+            return await self._execute_human(node, ctx, human_fn)
 
         elif node.kind == NodeKind.SUBGRAPH:
-            if agent_fn is None:
-                raise RuntimeError(f"SUBGRAPH node '{node.id}': agent_fn not provided")
-            return await agent_fn(node.id, {"subgraph": node.subgraph, **ctx})
+            return await self._execute_subgraph(node, ctx, agent_fn, tool_fn, human_fn)
 
         raise RuntimeError(f"Unknown node kind: {node.kind}")
+
+    async def _execute_subgraph(
+        self,
+        node: Node,
+        ctx: dict,
+        agent_fn: AgentFn | None,
+        tool_fn: ToolFn | None,
+        human_fn: HumanFn | None,
+    ) -> str:
+        """递归执行子 Workflow。
+
+        在注册表中查找子 Workflow，以当前 context 作为输入递归执行。
+        子 Workflow 的入口节点拿到父 context；子 Workflow 结束后，
+        最终节点的输出作为本节点的返回值。
+        """
+        sub_name = node.subgraph
+        if not sub_name:
+            raise RuntimeError(f"SUBGRAPH node '{node.id}': subgraph name not set")
+
+        child_wf = self._workflows.get(sub_name)
+        if child_wf is None:
+            raise RuntimeError(
+                f"SUBGRAPH node '{node.id}': unknown workflow '{sub_name}'. "
+                f"Available: {list(self._workflows.keys())}"
+            )
+
+        # 从 ctx 提取消息总线，父子共享
+        bus = ctx.get("message_bus")
+        parent_outputs = ctx.get("previous_outputs", {})
+
+        # 为子 Workflow 创建包装的 agent_fn——将父 context 注入子入口
+        async def child_agent_fn(nid: str, child_ctx: dict) -> str:
+            # 子节点同时看到父 context 和自己的 child_ctx
+            merged = {**ctx, **child_ctx}
+            merged["previous_outputs"] = {
+                **parent_outputs,
+                **child_ctx.get("previous_outputs", {}),
+            }
+            if agent_fn is not None:
+                return await agent_fn(nid, merged)
+            return f"sub:{nid}"
+
+        logger.info("Entering subgraph '%s' from node '%s'", sub_name, node.id)
+        _, trace = await self.execute(
+            child_wf,
+            agent_fn=child_agent_fn,
+            tool_fn=tool_fn,
+            human_fn=human_fn,
+            message_bus=bus,
+        )
+
+        # 返回子 Workflow 最后一个节点的输出
+        last_nid = trace.groups[-1][-1] if trace.groups and trace.groups[-1] else ""
+        last_result = trace.node_results.get(last_nid)
+        return last_result.output if last_result else f"subgraph '{sub_name}' completed"
+
+    async def _execute_human(
+        self,
+        node: Node,
+        ctx: dict,
+        human_fn: HumanFn | None,
+    ) -> str:
+        """执行人工确认节点——等待输入，超时则用默认值。
+
+        如果提供了 human_fn，调用它（通常是 console input 或 Web 回调）。
+        如果没提供，直接返回 default_response。
+        超时和 fallback 逻辑由 human_fn 内部处理，
+        编排器只负责在 human_fn 不可用时降级。
+        """
+        human_conf = node.human
+        if human_conf is None:
+            raise RuntimeError(f"HUMAN node '{node.id}': human config missing")
+
+        prompt = human_conf.prompt or f"Human approval required for '{node.id}'"
+        timeout = human_conf.timeout_sec
+
+        if human_fn is not None:
+            try:
+                return await human_fn(node.id, {
+                    "prompt": prompt,
+                    "timeout_sec": timeout,
+                    **ctx,
+                })
+            except asyncio.TimeoutError:
+                logger.warning("Human node '%s' timed out after %ds, using default", node.id, timeout)
+                return human_conf.default_response or "(timeout, no response)"
+
+        # 没有 human_fn → 直接返回默认值（自动审批模式）
+        logger.info("Human node '%s': no human_fn, auto-approving", node.id)
+        return human_conf.default_response or "(auto-approved)"
 
     async def _execute_with_loop(
         self,
