@@ -74,8 +74,8 @@ class ExecutionHooks:
     async def on_workflow_start(self, workflow: Workflow, ctx: HookContext) -> None:
         """Workflow 开始执行前。"""
 
-    async def on_workflow_end(self, workflow: Workflow, trace: Any, ctx: HookContext) -> None:
-        """Workflow 执行完成后。"""
+    async def on_workflow_end(self, workflow: Workflow, trace, ctx: HookContext) -> None:
+        """Workflow 执行完成后。trace 为 WorkflowTrace。"""
 
     # -- Group 级（每层并行组） --
     async def on_group_start(self, group: list[str], ctx: HookContext) -> None:
@@ -144,7 +144,7 @@ class LoggingHook(ExecutionHooks):
         self._log.info("Node '%s' → %s (%dms)", node.id, status, result.duration_ms)
 
     async def on_workflow_end(self, workflow, trace, ctx):
-        self._log.info("Workflow '%s' done (%dms)", workflow.name, trace.total_duration_ms)
+        self._log.info("Workflow '%s' done (%dms)", workflow.name, trace.summary.total_duration_ms)
 
 
 class PermissionHook(ExecutionHooks):

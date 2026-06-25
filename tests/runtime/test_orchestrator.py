@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import pytest
 from agentflow.dsl.types import Node, Edge, Workflow, NodeKind, FallbackPolicy
-from agentflow.runtime.orchestrator import DAGExecutor, NodeResult, ExecutionTrace
+from agentflow.runtime.orchestrator import DAGExecutor, NodeResult
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +75,7 @@ class TestDAGExecutorLinear:
         assert results["a"].success
         assert results["b"].success
         assert results["c"].success
-        assert trace.total_duration_ms >= 0
+        assert trace.summary.total_duration_ms >= 0
 
     async def test_linear_with_mock_responses(self, linear_workflow):
         """线性执行各节点返回正确的 mock 输出。"""
@@ -124,7 +124,7 @@ class TestDAGExecutorDiamond:
         assert execution_order[0] == "entry"
         assert execution_order[-1] == "end"
         assert set(execution_order[1:3]) == {"left", "right"}
-        assert trace.groups == [["entry"], ["left", "right"], ["end"]]
+        assert trace.dag_groups == [["entry"], ["left", "right"], ["end"]]
 
     async def test_diamond_collects_all_outputs(self, diamond_workflow):
         """所有节点输出都被正确收集。"""
@@ -265,7 +265,7 @@ class TestDAGExecutorSingleNode:
 
         assert len(results) == 1
         assert results["only"].output == "solo-output"
-        assert trace.total_duration_ms >= 0
+        assert trace.summary.total_duration_ms >= 0
 
     async def test_node_not_found(self):
         """Workflow 引用了不存在的节点 id（由 validator 保证，此处测兜底）。"""

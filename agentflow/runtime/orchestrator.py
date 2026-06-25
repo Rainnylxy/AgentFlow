@@ -27,6 +27,7 @@ from typing import Any, Callable, Awaitable, Optional, Union
 from agentflow.dsl.types import Workflow, Node, NodeKind, FallbackPolicy
 from agentflow.runtime.message_bus import MessageBus, AgentMessage
 from agentflow.runtime.hooks import ExecutionHooks, HookContext, StreamEvent, StreamCallback
+from agentflow.trace.tracer import WorkflowTrace, AgentTrace, AgentTurn, ToolCallRecord, MessageRecord
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ class DAGExecutor:
         message_bus: MessageBus | None = None,
         hooks: ExecutionHooks | None = None,
         stream: StreamCallback | None = None,
-    ) -> "tuple[dict[str, NodeResult], ExecutionTrace]":
+    ) -> "tuple[dict[str, NodeResult], WorkflowTrace]":
         """执行整个 Workflow DAG。
 
         hooks: 生命周期钩子，在节点/工具/组的关键节点回调。
@@ -111,8 +112,11 @@ class DAGExecutor:
 
         await hooks.on_workflow_start(workflow, hctx)
 
+        trace = WorkflowTrace.start(workflow_name=workflow.name)
+
         t0 = time.monotonic()
         groups = parallel_groups(workflow)
+        trace.dag_groups = groups
         all_results: dict[str, NodeResult] = {}
         bus = message_bus or MessageBus()
 
@@ -147,13 +151,33 @@ class DAGExecutor:
 
             await hooks.on_group_end(group, hctx)
 
-        t1 = time.monotonic()
-        trace = ExecutionTrace(
-            workflow_name=workflow.name,
-            total_duration_ms=int((t1 - t0) * 1000),
-            node_results=all_results,
-            groups=groups,
-        )
+        # 导出消息流
+        for msg in bus.all_messages():
+            trace.message_flow.append(MessageRecord(
+                timestamp=msg.timestamp,
+                from_agent=msg.from_agent,
+                to_agent=msg.to_agent,
+                intent=msg.intent,
+                payload=msg.payload,
+            ))
+
+        # 填 Trace 数据
+        for nid, nr in all_results.items():
+            if nid not in trace.node_traces:
+                trace.node_traces[nid] = AgentTrace(agent_id=nid)
+            at = trace.node_traces[nid]
+            at.success = nr.success
+            at.error = nr.error
+            at.total_duration_ms = nr.duration_ms
+
+            if nr.skipped_by_condition:
+                trace.summary.nodes_skipped += 1
+            elif nr.success:
+                trace.summary.nodes_executed += 1
+            else:
+                trace.summary.nodes_failed += 1
+
+        trace.finish()
         await hooks.on_workflow_end(workflow, trace, hctx)
         return all_results, trace
 
@@ -407,7 +431,7 @@ class DAGExecutor:
             return f"sub:{nid}"
 
         logger.info("Entering subgraph '%s' from node '%s'", sub_name, node.id)
-        _, trace = await self.execute(
+        child_results, _ = await self.execute(
             child_wf,
             agent_fn=child_agent_fn,
             tool_fn=tool_fn,
@@ -418,8 +442,9 @@ class DAGExecutor:
         )
 
         # 返回子 Workflow 最后一个节点的输出
-        last_nid = trace.groups[-1][-1] if trace.groups and trace.groups[-1] else ""
-        last_result = trace.node_results.get(last_nid)
+        last_nid = child_wf.nodes[-1].id
+        last_result = child_results.get(last_nid)
+        return last_result.output if last_result else f"subgraph '{sub_name}' completed"
         return last_result.output if last_result else f"subgraph '{sub_name}' completed"
 
     async def _execute_human(
