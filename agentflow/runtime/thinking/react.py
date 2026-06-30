@@ -3,9 +3,28 @@
 from agentflow.runtime.thinking.base import ThinkingStrategy, ThinkContext, ThinkResult
 
 
+# ReAct 模式的思考引导——注入到 system_prompt 前面
+REACT_SYSTEM_PROMPT = """## 推理与行动 (ReAct) 模式
+
+你需要按照以下模式思考和行动：
+
+1. **Thought（推理）**: 分析当前状态，判断是否需要更多信息。
+2. **Action（行动）**: 如果需要信息，调用相应的工具。工具返回结果后继续推理。
+3. **Observation（观察）**: 根据工具返回的结果更新你的理解。
+4. 重复 Thought → Action → Observation 循环。
+5. 当信息足够时，直接给出 **最终答案**，不要再调用工具。
+
+重要规则：
+- 每次只调用需要的工具，不要一次调用多个，除非它们互不依赖。
+- 工具调用失败时，尝试其他方法，不要重复相同的失败调用。
+- 确认信息充足后立即给出答案，不要无效循环。
+"""
+
+
 class ReActStrategy(ThinkingStrategy):
     """ReAct (Reasoning + Acting) 策略。
 
+    自动注入 ReAct 思考引导到 system prompt。
     执行循环：
     1. Thought: LLM 生成推理（可能包含工具调用）
     2. Action: 执行工具调用
@@ -14,7 +33,9 @@ class ReActStrategy(ThinkingStrategy):
     """
 
     async def run(self, context: ThinkContext) -> ThinkResult:
-        messages = [{"role": "system", "content": context.system_prompt}]
+        # 注入 ReAct 思考引导 + 用户自定义 prompt
+        system_content = REACT_SYSTEM_PROMPT + "\n\n" + context.system_prompt
+        messages = [{"role": "system", "content": system_content}]
 
         # 注入已有消息历史
         for msg in context.messages:
