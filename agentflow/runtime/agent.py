@@ -12,6 +12,7 @@ class AgentResult:
     output: str
     tool_calls: list = field(default_factory=list)
     steps: list = field(default_factory=list)
+    agent_trace: object = None  # AgentTrace | None — 单 Agent 的完整执行轨迹
 
 
 class BaseAgent(ABC):
@@ -32,5 +33,5 @@ class BaseAgent(ABC):
         self.max_iterations = max_iterations
 
     @abstractmethod
-    async def run(self, user_input: str) -> AgentResult:
+    async def run(self, user_input: str, stream=None, agent_trace=None) -> AgentResult:
         ...

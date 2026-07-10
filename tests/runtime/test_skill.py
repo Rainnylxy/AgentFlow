@@ -71,16 +71,29 @@ class TestSkillLoader:
             assert names == {"skill-a", "skill-b"}
 
     def test_skill_to_system_prompt(self):
-        """Skill.to_system_prompt() 返回 prompt 文本。"""
+        """Skill.to_system_prompt() 返回 prompt 文本（已加载时）。"""
         skill = Skill(
             name="test",
             description="test",
             prompt="## Test\nContent here.",
             tools=[],
+            _loaded=True,
         )
         result = skill.to_system_prompt()
         assert "## Test" in result
         assert "Content here" in result
+
+    def test_skill_unloaded_shows_metadata(self):
+        """未加载的 Skill 的 to_system_prompt() 返回元数据摘要。"""
+        skill = Skill(
+            name="code-review",
+            description="代码审查能力",
+            tools=["git_diff"],
+            _loaded=False,
+        )
+        result = skill.to_system_prompt()
+        assert "code-review" in result
+        assert "代码审查能力" in result
 
     async def test_missing_file_raises(self):
         """加载不存在的文件抛出 FileNotFoundError。"""

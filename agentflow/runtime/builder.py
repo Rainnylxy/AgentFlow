@@ -18,6 +18,7 @@ from pathlib import Path
 from agentflow.runtime.agent import BaseAgent, AgentResult
 from agentflow.runtime.thinking import ThinkingEngine, ThinkingMode, ThinkContext
 from agentflow.runtime.toolkit import ToolKit, Tool
+from agentflow.runtime.tool_registry import ToolType
 from agentflow.runtime.memory.manager import MemoryManager, MemoryProfile
 from agentflow.runtime.prompt import PromptTemplate
 from agentflow.runtime.prompt.section import Section
@@ -124,11 +125,11 @@ class AgentBuilder:
         if self._llm_client is None:
             raise ValueError("with_llm() is required. Provide an LLM client.")
 
-        # 加载 Skills（异步，支持 LLM 驱动的 Step 提取）
+        # 加载 Skills（懒加载：只读 name/description/tools，不读 body，不调 LLM）
         loader = SkillLoader(skills_dir=self._skills_dir, llm_client=self._llm_client)
         skills: list[Skill] = []
         for skill_name in self._skill_names:
-            skill = await loader.load(skill_name)
+            skill = await loader.load_meta(skill_name)
             skills.append(skill)
 
         # 如果只有 skills、没有 prompt_template，创建一个容纳它们
@@ -164,6 +165,7 @@ class AgentBuilder:
             memory=memory,
             thinking_engine=thinking_engine,
             max_iterations=self._max_iterations,
+            skills=skills,
         )
 
 
@@ -171,9 +173,10 @@ class _BuiltAgent(BaseAgent):
     """AgentBuilder 构建出的完整 Agent。
 
     内部委托给 ThinkingEngine 执行思考循环。
+    Skill 激活采用真实懒加载——LLM 调用 activate_skill:xxx 工具时才加载。
     """
 
-    def __init__(self, name, llm_client, system_prompt, toolkit, memory, thinking_engine, max_iterations):
+    def __init__(self, name, llm_client, system_prompt, toolkit, memory, thinking_engine, max_iterations, skills=None):
         super().__init__(
             name=name,
             llm_client=llm_client,
@@ -184,8 +187,37 @@ class _BuiltAgent(BaseAgent):
         )
         self.thinking_engine = thinking_engine
         self.toolkit = toolkit
+        self._skills: list = skills or []
 
-    async def run(self, user_input: str) -> AgentResult:
+    def _register_skill_activation_tools(self) -> dict[str, str]:
+        """为每个未加载的 Skill 注册 activate_skill:xxx 工具。
+
+        返回 {tool_name: skill_name} 映射表，供拦截使用。
+        """
+        mapping = {}
+        for skill in self._skills:
+            if skill._loaded:
+                continue
+            tool_name = f"activate_skill:{skill.name}"
+            self.toolkit.add(Tool(
+                name=tool_name,
+                description=f"激活「{skill.name}」能力：{skill.description}。当需要 {skill.name} 相关能力时调用。",
+                tool_type=ToolType.LOCAL,
+                func=None,  # 拦截执行，不走正常 func 调用
+            ))
+            mapping[tool_name] = skill.name
+        return mapping
+
+    async def run(self, user_input: str, stream=None, agent_trace=None) -> AgentResult:
+        """执行 Agent。
+
+        stream: 可选的流式回调 async (StreamEvent) -> None。
+        agent_trace: 可选的外部 AgentTrace（多 Agent 场景下编排器传入）。
+                     不传则自动创建。
+        """
+        # 注册 Skill 激活工具
+        skill_tool_map = self._register_skill_activation_tools()
+
         # 检索门：从语义记忆拉取相关事实
         retrieved = self.memory.pre_turn(user_input)
 
@@ -201,8 +233,13 @@ class _BuiltAgent(BaseAgent):
         from agentflow.runtime.memory.working import Message
         self.memory.working.add(Message(role="user", content=user_input))
 
-        # 构建 ThinkContext
+        # 构建 ThinkContext（含 AgentTrace 用于记录执行轨迹）
+        # 如果编排器通过 context 传了 _agent_trace，优先用它（多 Agent 场景）
         tools_for_llm = self.toolkit.list_for_llm() if hasattr(self, 'toolkit') else []
+        from agentflow.trace.tracer import AgentTrace
+        # 如果编排器传了 agent_trace 就用它（多 Agent 场景），否则自己建（单 Agent 场景）
+        if agent_trace is None:
+            agent_trace = AgentTrace(agent_id=self.name)
         context = ThinkContext(
             user_input=user_input,
             system_prompt=self.system_prompt,
@@ -211,7 +248,12 @@ class _BuiltAgent(BaseAgent):
             llm_client=self.llm_client,
             memory=self.memory,
             max_iterations=self.max_iterations,
+            stream=stream,
+            skill_tool_map=skill_tool_map,
+            agent_trace=agent_trace,
         )
+        # 将 Skill 对象注入 context，供拦截器查找
+        context._skills_map = {s.name: s for s in self._skills}
 
         # 执行思考
         think_result = await self.thinking_engine.run(context)
@@ -227,4 +269,5 @@ class _BuiltAgent(BaseAgent):
             output=think_result.output,
             tool_calls=think_result.tool_calls,
             steps=think_result.steps,
+            agent_trace=agent_trace,
         )

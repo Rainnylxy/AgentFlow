@@ -1,30 +1,13 @@
 """Skill 系统：可复用的 Agent 能力模块。
 
-Skill 文件格式（Markdown + YAML frontmatter）:
-
-    ---
-    name: my-skill
-    description: 一句话描述
-    tools: [tool_a, tool_b]
-    ---
-
-    # Skill 正文（Markdown 格式的 prompt 内容）
-
-    ## 流程
-    1. 分析用户需求
-    2. 调用 tool_a 获取数据
-    3. 汇总结果
-
-    ## 约束
-    - 第三步之前不要调用工具
-
-用户用纯自然语言写流程和约束，SkillLoader.load() 在加载时通过 LLM
-自动提取结构化 Step（用户无感知）。运行时便可对每一步做工具门禁等硬约束。
+懒加载设计：
+    build() 时只读 frontmatter（name + description + tools）——不读 body，不调 LLM。
+    prompt 和 steps 在第一次使用时按需加载。
 
 用法:
-    loader = SkillLoader(llm_client=client)
-    skill = await loader.load("skills/my-skill.md")
-    # skill.steps 已被自动解析为结构化步骤
+    loader = SkillLoader()
+    skill = await loader.load_meta("customer-support")   # 快，无 LLM
+    await skill.ensure_loaded()                           # 按需加载 body + steps
 """
 
 from __future__ import annotations
@@ -41,37 +24,53 @@ from pathlib import Path
 
 @dataclass
 class Step:
-    """从 Skill 自然语言描述中提取的结构化步骤。
-
-    由 StepExtractor 在加载时自动解析，用户不可见。
-    运行时用于工具门禁、完成检测等硬约束。
-    """
-    name: str                     # 步骤名，如 "分析结构"
-    description: str              # 步骤描述
-    allowed_tools: list[str] = field(default_factory=list)  # 空 = 不许调工具
-    completion_signal: str = "llm_judge"  # llm_judge | tool_called:name | output_schema:...
+    """从 Skill 自然语言描述中提取的结构化步骤。"""
+    name: str
+    description: str
+    allowed_tools: list[str] = field(default_factory=list)
+    completion_signal: str = "llm_judge"
 
 
 @dataclass
 class Skill:
     """一个可复用的 Agent 能力模块。
 
-    包含 prompt（自然语言正文）和结构化 steps（LLM 自动提取）。
+    懒加载：build() 时只填充 name/description/tools。
+    prompt 和 steps 在第一次 ensure_loaded() 时才从文件读取。
     """
 
     name: str
-    description: str
-    prompt: str                          # 正文（markdown 部分）
-    tools: list[str] = field(default_factory=list)       # 需要的工具名列表
-    steps: list[Step] = field(default_factory=list)      # LLM 提取的结构化步骤
+    description: str = ""
+    tools: list[str] = field(default_factory=list)
+
+    prompt: str = ""       # 正文（markdown 部分）——懒加载
+    steps: list[Step] = field(default_factory=list)  # 结构化步骤——懒加载
+
+    # -- 内部懒加载用 --
+    _loaded: bool = field(default=False, repr=False)
+    _file_path: str = field(default="", repr=False)
+    _loader_ref: object = field(default=None, repr=False)
 
     def to_system_prompt(self) -> str:
         """生成可用于 System Prompt 的文本。"""
+        if not self._loaded:
+            return f"## {self.name}\n{self.description}"
         return self.prompt
+
+    async def ensure_loaded(self) -> None:
+        """按需加载——如果还没加载，从源文件读 body + 提取 steps。"""
+        if self._loaded or not self._file_path:
+            return
+        if self._loader_ref is None:
+            return
+        full = await self._loader_ref._load_from_file(Path(self._file_path))
+        self.prompt = full.prompt
+        self.steps = full.steps
+        self._loaded = True
 
 
 # ---------------------------------------------------------------------------
-# Step Extraction（LLM 驱动）
+# Step 提取（LLM 驱动，可选）
 # ---------------------------------------------------------------------------
 
 STEP_EXTRACTION_PROMPT = """You are analyzing a skill description written in natural language.
@@ -81,54 +80,43 @@ Skill text:
 {body}
 
 Output a JSON array of steps. Each step has:
-- name: short step name (Chinese or English)
+- name: short step name
 - description: what this step does
 - allowed_tools: list of tool names allowed in this step (empty = no tools allowed)
-- completion_signal: one of:
-  - "llm_judge" (LLM decides when this step is done)
-  - "tool_called:<tool_name>" (step is done when this tool is called)
+- completion_signal: "llm_judge" or "tool_called:<tool_name>"
 
 Return ONLY valid JSON, no other text.
 Example:
 [
-  {{"name": "分析结构", "description": "分析输入内容的结构", "allowed_tools": [], "completion_signal": "llm_judge"}},
-  {{"name": "保存结果", "description": "调用保存工具", "allowed_tools": ["save"], "completion_signal": "tool_called:save"}}
+  {{"name": "分析结构", "description": "...", "allowed_tools": [], "completion_signal": "llm_judge"}},
+  {{"name": "保存", "description": "...", "allowed_tools": ["save"], "completion_signal": "tool_called:save"}}
 ]"""
 
 
 class StepExtractor:
-    """使用 LLM 从 Skill 自然语言正文中提取结构化步骤。
-
-    加载时调用一次，结果缓存在 Skill.steps 中。
-    """
+    """使用 LLM 从 Skill 自然语言正文中提取结构化步骤。"""
 
     def __init__(self, llm_client):
         self._llm_client = llm_client
 
     async def extract(self, body: str) -> list[Step]:
-        """从 Skill 正文文本中提取步骤。"""
         if not self._llm_client:
             return []
-
-        prompt = STEP_EXTRACTION_PROMPT.format(body=body[:4000])  # 截断保护
+        prompt = STEP_EXTRACTION_PROMPT.format(body=body[:4000])
         try:
-            response = await self._llm_client.chat([
-                {"role": "user", "content": prompt}
-            ])
+            response = await self._llm_client.chat([{"role": "user", "content": prompt}])
             data = json.loads(response.content)
             if not isinstance(data, list):
                 return []
-
-            steps = []
-            for i, item in enumerate(data):
-                step = Step(
+            return [
+                Step(
                     name=item.get("name", f"step_{i}"),
                     description=item.get("description", ""),
                     allowed_tools=item.get("allowed_tools", []),
                     completion_signal=item.get("completion_signal", "llm_judge"),
                 )
-                steps.append(step)
-            return steps
+                for i, item in enumerate(data)
+            ]
         except (json.JSONDecodeError, KeyError, Exception):
             return []
 
@@ -140,9 +128,14 @@ class StepExtractor:
 class SkillLoader:
     """从 Markdown 文件加载 Skill。
 
-    支持可选的 LLM 驱动 Step 提取：
+    支持懒加载：
+        loader = SkillLoader()
+        skill = await loader.load_meta("customer-support")  # 只读 frontmatter
+        await skill.ensure_loaded()                          # 按需读 body
+
+    支持 LLM Step 提取：
         loader = SkillLoader(llm_client=client)
-        skill = await loader.load("skills/my-skill.md")
+        skill = await loader.load("customer-support")        # 完整加载 + 提取
     """
 
     def __init__(
@@ -154,96 +147,138 @@ class SkillLoader:
         self._llm_client = llm_client
         self._cache: dict[str, Skill] = {}
 
-    async def load(self, path_or_name: str) -> Skill:
-        """加载单个 Skill 文件。
+    # ------------------------------------------------------------------
+    # 懒加载 — 方法 1：只读元数据（build() 用）
+    # ------------------------------------------------------------------
 
-        Args:
-            path_or_name: Skill 文件路径，或 skill 名（自动在 skills_dir 下查找）
+    async def load_meta(self, path_or_name: str) -> Skill:
+        """只加载元数据（name、description、tools）——不读 body，不调 LLM。
 
-        Returns:
-            Skill 对象（含 LLM 提取的结构化 steps）
+        这是 build() 时用的方法。Skill 的 prompt 和 steps 留空，
+        等运行时按需调用 skill.ensure_loaded() 加载。
         """
-        # 如果已缓存，直接返回
         if path_or_name in self._cache:
             return self._cache[path_or_name]
 
-        # 解析路径
-        path = Path(path_or_name)
-        if not path.exists() or not path.suffix:
-            # 作为 skill 名，在 skills_dir 下查找
-            if self._skills_dir is None:
-                raise FileNotFoundError(
-                    f"Skill '{path_or_name}' not found. No skills_dir configured."
-                )
-            path = self._skills_dir / f"{path_or_name}.md"
+        path = self._resolve_path(path_or_name)
+        return self._load_meta_from_file(path)
 
-        if not path.exists():
-            raise FileNotFoundError(f"Skill file not found: {path}")
-
-        return await self._load_from_file(path)
-
-    async def load_all(self, skills_dir: str | Path) -> list[Skill]:
-        """加载目录下的所有 .md Skill 文件。"""
-        dir_path = Path(skills_dir)
-        if not dir_path.is_dir():
-            return []
-
-        skills = []
-        for md_file in sorted(dir_path.glob("*.md")):
-            try:
-                skill = await self._load_from_file(md_file)
-                skills.append(skill)
-            except ValueError:
-                continue  # 跳过非 skill 的 .md 文件
-
-        return skills
-
-    def load_sync(self, path_or_name: str) -> Skill:
-        """同步版加载（不进行 LLM Step 提取）。
-
-        向后兼容：如果不想用 LLM 提取步骤，用此方法。
-        """
-        import asyncio
-        # 检查是否在 event loop 中
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(self.load(path_or_name))
-        else:
-            import concurrent.futures
-            future = asyncio.run_coroutine_threadsafe(
-                self.load(path_or_name), loop
-            )
-            return future.result()
-
-    async def _load_from_file(self, path: Path) -> Skill:
-        """解析单个 Skill 文件。"""
+    def _load_meta_from_file(self, path: Path) -> Skill:
+        """只解析 frontmatter。"""
         content = path.read_text(encoding="utf-8")
+        yaml_text, _ = self._split_frontmatter(content, path)
 
-        # 解析 YAML frontmatter（--- 分隔）
-        if not content.startswith("---"):
-            raise ValueError(
-                f"Invalid skill file '{path}': must start with ---"
-            )
-
-        parts = content.split("---")
-        if len(parts) < 2:
-            raise ValueError(
-                f"Invalid skill file '{path}': missing YAML frontmatter (--- ... ---)"
-            )
-
-        yaml_text = parts[1].strip()
-        body = "---".join(parts[2:]).strip()
-
-        # 解析 YAML
         import yaml as _yaml
         try:
-            meta = _yaml.safe_load(yaml_text)
+            meta = _yaml.safe_load(yaml_text) or {}
         except Exception as e:
             raise ValueError(f"Invalid YAML frontmatter in '{path}': {e}")
 
-        if meta is None:
-            raise ValueError(f"Empty YAML frontmatter in '{path}'")
+        name = meta.get("name", path.stem)
+        description = meta.get("description", "")
+        tools = meta.get("tools", [])
+
+        skill = Skill(
+            name=name,
+            description=description,
+            tools=tools if isinstance(tools, list) else [],
+            prompt="",
+            steps=[],
+            _loaded=False,
+            _file_path=str(path),
+            _loader_ref=self,
+        )
+
+        self._cache[str(path)] = skill
+        self._cache[name] = skill
+        return skill
+
+    # ------------------------------------------------------------------
+    # 完整加载 — 方法 2（用到 Skill 内容时调用）
+    # ------------------------------------------------------------------
+
+    async def load(self, path_or_name: str) -> Skill:
+        """完整加载 Skill（body + 可选 LLM Step 提取）。
+
+        如果之前已通过 load_meta() 缓存，则返回缓存对象。
+        完整加载会自动触发 ensure_loaded()。
+        """
+        # 如果已经在缓存中（可能是 load_meta 放的），直接用
+        if path_or_name in self._cache:
+            skill = self._cache[path_or_name]
+        else:
+            path = self._resolve_path(path_or_name)
+            skill = self._load_meta_from_file(path)
+
+        if not skill._loaded:
+            full = await self._load_from_file(Path(skill._file_path) if skill._file_path else self._resolve_path(path_or_name))
+            skill.prompt = full.prompt
+            skill.steps = full.steps
+            skill._loaded = True
+        return skill
+
+    async def load_all(self, skills_dir: str | Path) -> list[Skill]:
+        """加载目录下所有 .md Skill 文件的完整内容。"""
+        dir_path = Path(skills_dir)
+        if not dir_path.is_dir():
+            return []
+        skills = []
+        for md_file in sorted(dir_path.glob("*.md")):
+            try:
+                skill = await self.load(str(md_file))
+                skills.append(skill)
+            except ValueError:
+                continue
+        return skills
+
+    def load_sync(self, path_or_name: str) -> Skill:
+        """同步版加载（不进行 LLM Step 提取）。向后兼容。"""
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+            import concurrent.futures
+            future = asyncio.run_coroutine_threadsafe(self.load(path_or_name), loop)
+            return future.result()
+        except RuntimeError:
+            return asyncio.run(self.load(path_or_name))
+
+    # ------------------------------------------------------------------
+    # 文件解析（内部）
+    # ------------------------------------------------------------------
+
+    def _resolve_path(self, path_or_name: str) -> Path:
+        path = Path(path_or_name)
+        if path.exists() and path.suffix:
+            return path
+        if self._skills_dir is None:
+            raise FileNotFoundError(f"Skill '{path_or_name}' not found. No skills_dir configured.")
+        resolved = self._skills_dir / f"{path_or_name}.md"
+        if not resolved.exists():
+            raise FileNotFoundError(f"Skill file not found: {resolved}")
+        return resolved
+
+    @staticmethod
+    def _split_frontmatter(content: str, path: Path) -> tuple[str, str]:
+        """拆分 YAML frontmatter 和 body。返回 (yaml_text, body)。"""
+        if not content.startswith("---"):
+            raise ValueError(f"Invalid skill file '{path}': must start with ---")
+        parts = content.split("---")
+        if len(parts) < 2:
+            raise ValueError(f"Invalid skill file '{path}': missing YAML frontmatter")
+        yaml_text = parts[1].strip()
+        body = "---".join(parts[2:]).strip()
+        return yaml_text, body
+
+    async def _load_from_file(self, path: Path) -> Skill:
+        """解析完整 Skill 文件（含 LLM Step 提取）。"""
+        content = path.read_text(encoding="utf-8")
+        yaml_text, body = self._split_frontmatter(content, path)
+
+        import yaml as _yaml
+        try:
+            meta = _yaml.safe_load(yaml_text) or {}
+        except Exception as e:
+            raise ValueError(f"Invalid YAML frontmatter in '{path}': {e}")
 
         name = meta.get("name", path.stem)
         description = meta.get("description", "")
@@ -253,14 +288,13 @@ class SkillLoader:
         extractor = StepExtractor(self._llm_client)
         steps = await extractor.extract(body)
 
-        skill = Skill(
+        return Skill(
             name=name,
             description=description,
-            prompt=body,
             tools=tools if isinstance(tools, list) else [],
+            prompt=body,
             steps=steps,
+            _loaded=True,
+            _file_path=str(path),
+            _loader_ref=self,
         )
-
-        self._cache[str(path)] = skill
-        self._cache[name] = skill
-        return skill

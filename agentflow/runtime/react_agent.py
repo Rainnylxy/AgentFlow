@@ -37,7 +37,7 @@ class ReActAgent(BaseAgent):
         )
         super().__init__(*args, **kwargs)
 
-    async def run(self, user_input: str) -> AgentResult:
+    async def run(self, user_input: str, stream=None, agent_trace=None) -> AgentResult:
         self.memory.short_term.clear()
         self.memory.short_term.add(Message(role="user", content=user_input))
 

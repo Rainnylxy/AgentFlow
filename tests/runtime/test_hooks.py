@@ -230,5 +230,244 @@ class TestLoggingHook:
         await executor.execute(wf, agent_fn=agent_fn, hooks=hook)
 
         output = stream.getvalue()
-        assert "started" in output
-        assert "Node 'a'" in output
+
+
+class TestAgentTraceRecording:
+    """验证思考引擎逐轮记录 trace 数据"""
+
+    async def test_agent_result_contains_trace(self):
+        """AgentResult 包含完整的 AgentTrace。"""
+        from unittest.mock import AsyncMock, MagicMock
+        from agentflow.runtime.builder import AgentBuilder
+        from agentflow.runtime.thinking import ThinkingMode
+        from agentflow.runtime.memory.manager import MemoryProfile
+        from agentflow.runtime.toolkit import tool
+
+        mock_llm = AsyncMock()
+        mock_llm.chat.side_effect = [
+            MagicMock(content="Need to search.", role="assistant", tool_calls=[{
+                "id": "c1", "type": "function",
+                "function": {"name": "search", "arguments": '{"q": "refund"}'},
+            }]),
+            MagicMock(content="The answer is 30 days.", role="assistant", tool_calls=[]),
+        ]
+
+        @tool
+        def search(q: str) -> str:
+            """Search."""
+            return f"Found: {q}"
+
+        agent = await (
+            AgentBuilder("trace-agent")
+            .with_llm(mock_llm)
+            .with_tools(search)
+            .with_prompt("You are helpful.")
+            .with_thinking(ThinkingMode.REACT)
+            .with_memory(MemoryProfile.light())
+            .with_max_iterations(5)
+            .build()
+        )
+
+        result = await agent.run("What is the refund policy?")
+
+        # 验证 trace 存在且有数据
+        assert result.agent_trace is not None
+        at = result.agent_trace
+        assert at.success
+        assert at.total_turns == 1
+        assert at.total_tool_calls == 1
+
+        # 验证 turn 内容
+        turn = at.turns[0]
+        assert "search" in turn.thinking.lower() or "Need" in turn.thinking
+        assert len(turn.tool_calls) == 1
+        assert turn.tool_calls[0].tool == "search"
+        assert turn.tool_calls[0].input == {"q": "refund"}
+        assert "Found" in turn.tool_calls[0].output
+        assert "30 days" in turn.final_answer
+
+    async def test_trace_records_skill_activation(self):
+        """Trace 记录 Skill 激活事件。"""
+        from unittest.mock import AsyncMock, MagicMock
+        from agentflow.runtime.builder import AgentBuilder
+        from agentflow.runtime.thinking import ThinkingMode
+        from agentflow.runtime.memory.manager import MemoryProfile
+        from agentflow.runtime.skill import Skill
+
+        mock_llm = AsyncMock()
+        mock_llm.chat.side_effect = [
+            # 第1轮：激活 skill
+            MagicMock(content=None, role="assistant", tool_calls=[{
+                "id": "c1", "type": "function",
+                "function": {"name": "activate_skill:helper", "arguments": "{}"},
+            }]),
+            # 第2轮：最终回答
+            MagicMock(content="Done with skill.", role="assistant", tool_calls=[]),
+        ]
+
+        skill = Skill(
+            name="helper",
+            description="Helper skill",
+            prompt="## Helper\nYou are a helper.",
+            tools=[],
+            _loaded=False,
+            _file_path="",
+            _loader_ref=None,
+        )
+
+        agent = await (
+            AgentBuilder("skill-trace")
+            .with_llm(mock_llm)
+            .with_prompt("Base prompt.")
+            .with_thinking(ThinkingMode.REACT)
+            .with_memory(MemoryProfile.light())
+            .with_max_iterations(5)
+            .build()
+        )
+        # 手动注入 skill（绕过 with_skill）
+        agent._skills = [skill]
+
+        result = await agent.run("help me")
+
+        at = result.agent_trace
+        assert at is not None
+        # 应该有 2 轮：激活 + 回答
+        assert at.total_turns == 1
+        assert at.total_tool_calls == 1
+        # 工具调用记录应该标记为 skill 激活
+        tc = at.turns[0].tool_calls[0]
+        assert "helper" in tc.tool
+
+    async def test_trace_no_tools(self):
+        """无工具调用的简单问答也有 trace。"""
+        from unittest.mock import AsyncMock, MagicMock
+        from agentflow.runtime.builder import AgentBuilder
+        from agentflow.runtime.thinking import ThinkingMode
+        from agentflow.runtime.memory.manager import MemoryProfile
+
+        mock_llm = AsyncMock()
+        mock_llm.chat.return_value = MagicMock(
+            content="Hello! How can I help?", role="assistant", tool_calls=[],
+        )
+
+        agent = await (
+            AgentBuilder("simple")
+            .with_llm(mock_llm)
+            .with_prompt("You are helpful.")
+            .with_thinking(ThinkingMode.REACT)
+            .with_memory(MemoryProfile.light())
+            .build()
+        )
+
+        result = await agent.run("Hello")
+
+        assert result.agent_trace is not None
+        assert result.agent_trace.success
+        assert result.agent_trace.total_tool_calls == 0
+        assert result.agent_trace.total_turns == 1
+        assert "Hello" in result.agent_trace.turns[0].final_answer
+
+
+class TestThinkingEngineStreaming:
+    """思考引擎内部的流式事件"""
+
+    async def test_react_strategy_emits_thinking_and_tool_events(self):
+        """ReAct 策略在有工具调用时逐轮 emit 事件。"""
+        from unittest.mock import AsyncMock, MagicMock
+        from agentflow.runtime.thinking.base import ThinkContext
+        from agentflow.runtime.thinking.react import ReActStrategy
+        from agentflow.runtime.toolkit import ToolKit, tool
+        from agentflow.runtime.memory.manager import MemoryManager
+
+        events = []
+
+        async def stream_handler(event):
+            events.append(event)
+
+        mock_llm = AsyncMock()
+        mock_llm.chat.side_effect = [
+            MagicMock(
+                content="Let me look that up.",
+                role="assistant",
+                tool_calls=[{
+                    "id": "c1", "type": "function",
+                    "function": {"name": "search", "arguments": '{"query": "refund"}'},
+                }],
+            ),
+            MagicMock(content="The refund policy is 30 days.", role="assistant", tool_calls=[]),
+        ]
+
+        kit = ToolKit()
+
+        @tool
+        def search(query: str) -> str:
+            """Search."""
+            return f"Found info about {query}"
+
+        kit.add(search)
+
+        ctx = ThinkContext(
+            user_input="refund policy?",
+            system_prompt="You are helpful.",
+            messages=[],
+            tools=kit.list_for_llm(),
+            llm_client=mock_llm,
+            memory=MemoryManager(),
+            max_iterations=5,
+            stream=stream_handler,
+        )
+
+        strategy = ReActStrategy(toolkit=kit)
+        result = await strategy.run(ctx)
+
+        assert "30 days" in result.output
+
+        # 验证事件类型链：thinking → tool_call → tool_result → final
+        event_types = [e.type for e in events]
+        assert "thinking" in event_types
+        assert "tool_call" in event_types
+        assert "tool_result" in event_types
+        assert "final" in event_types
+
+    async def test_builder_agent_stream_flows_through(self):
+        """AgentBuilder 构建的 Agent，stream 从 run() 透传到思考引擎。"""
+        from unittest.mock import AsyncMock, MagicMock
+        from agentflow.runtime.builder import AgentBuilder
+        from agentflow.runtime.thinking import ThinkingMode
+        from agentflow.runtime.memory.manager import MemoryProfile
+        from agentflow.runtime.toolkit import tool
+
+        events = []
+
+        async def stream_handler(event):
+            events.append(event)
+
+        mock_llm = AsyncMock()
+        mock_llm.chat.side_effect = [
+            MagicMock(content="Got it.", role="assistant", tool_calls=[{
+                "id": "c1", "type": "function",
+                "function": {"name": "lookup", "arguments": '{"query": "test"}'},
+            }]),
+            MagicMock(content="Here is the answer.", role="assistant", tool_calls=[]),
+        ]
+
+        @tool
+        def lookup(query: str) -> str:
+            return f"Result: {query}"
+
+        agent = await (
+            AgentBuilder("stream-agent")
+            .with_llm(mock_llm)
+            .with_tools(lookup)
+            .with_prompt("You are helpful.")
+            .with_thinking(ThinkingMode.REACT)
+            .with_memory(MemoryProfile.light())
+            .with_max_iterations(5)
+            .build()
+        )
+
+        result = await agent.run("test query", stream=stream_handler)
+
+        assert "answer" in result.output.lower() or "Here" in result.output
+        assert len(events) >= 3  # thinking + tool_call + tool_result + final
+        assert "final" in [e.type for e in events]

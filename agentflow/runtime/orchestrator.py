@@ -142,7 +142,7 @@ class DAGExecutor:
                 group_results = await asyncio.gather(*[
                     self._execute_node(
                         workflow, nid, all_results,
-                        agent_fn, tool_fn, human_fn, bus, hooks, _emit, hctx,
+                        agent_fn, tool_fn, human_fn, bus, hooks, _emit, hctx, trace,
                     )
                     for nid in active
                 ])
@@ -163,12 +163,14 @@ class DAGExecutor:
 
         # 填 Trace 数据
         for nid, nr in all_results.items():
-            if nid not in trace.node_traces:
-                trace.node_traces[nid] = AgentTrace(agent_id=nid)
-            at = trace.node_traces[nid]
+            at = trace.node_traces.get(nid)
+            if at is None:
+                at = AgentTrace(agent_id=nid)
+                trace.node_traces[nid] = at
             at.success = nr.success
             at.error = nr.error
-            at.total_duration_ms = nr.duration_ms
+            if at.total_duration_ms == 0:
+                at.total_duration_ms = nr.duration_ms
 
             if nr.skipped_by_condition:
                 trace.summary.nodes_skipped += 1
@@ -271,10 +273,15 @@ class DAGExecutor:
         hooks: ExecutionHooks,
         stream: StreamCallback | None,
         hctx: HookContext,
+        workflow_trace: WorkflowTrace,
     ) -> NodeResult:
         node = self._get_node(workflow, node_id)
         if node is None:
             return NodeResult(node_id=node_id, success=False, error=f"Node not found")
+
+        # 确保 WorkflowTrace 中有该节点的 AgentTrace
+        if node_id not in workflow_trace.node_traces:
+            workflow_trace.node_traces[node_id] = AgentTrace(agent_id=node_id)
 
         hctx.node_id = node_id
         hctx.node_kind = node.kind.value
@@ -283,15 +290,19 @@ class DAGExecutor:
         # 收集发给该节点的未读消息
         incoming = bus.receive(node_id)
 
+        node_agent_trace = workflow_trace.node_traces.get(node_id)
+
         # 循环节点 —— wrapper
         if node.loop:
             result = await self._execute_with_loop(
                 node, workflow, results_so_far,
                 agent_fn, tool_fn, human_fn, bus, incoming, hooks, stream, hctx,
+                workflow_trace, node_agent_trace,
             )
         else:
             result = await self._execute_once(
-                node, workflow, results_so_far, agent_fn, tool_fn, human_fn, bus, incoming, hooks, stream, hctx,
+                node, workflow, results_so_far, agent_fn, tool_fn, human_fn, bus, incoming,
+                hooks, stream, hctx, node_agent_trace,
             )
 
         await hooks.on_node_end(node, result, hctx)
@@ -310,6 +321,7 @@ class DAGExecutor:
         hooks: ExecutionHooks,
         stream: StreamCallback | None,
         hctx: HookContext,
+        node_agent_trace: AgentTrace | None = None,
     ) -> NodeResult:
         """单次执行一个节点（不含循环）。"""
         timeout_ms = node.timeout_ms or self.default_timeout_ms
@@ -319,7 +331,7 @@ class DAGExecutor:
         for attempt in range(max_retries + 1):
             t0 = time.monotonic()
             try:
-                ctx = self._build_context(node, workflow, results_so_far, incoming, bus)
+                ctx = self._build_context(node, workflow, results_so_far, incoming, bus, node_agent_trace)
                 # 注入 hook 共享上下文
                 ctx["_hook_shared"] = hctx.shared
                 output = await asyncio.wait_for(
@@ -494,6 +506,8 @@ class DAGExecutor:
         hooks: ExecutionHooks,
         stream: StreamCallback | None,
         hctx: HookContext,
+        workflow_trace: WorkflowTrace,
+        node_agent_trace: AgentTrace | None = None,
     ) -> NodeResult:
         """循环执行节点直到条件满足或达到上限。"""
         assert node.loop is not None
@@ -504,7 +518,7 @@ class DAGExecutor:
         for i in range(max_loop):
             result = await self._execute_once(
                 node, workflow, results_so_far, agent_fn, tool_fn, human_fn, bus, incoming,
-                hooks, stream, hctx,
+                hooks, stream, hctx, node_agent_trace,
             )
             outputs.append(result.output if result.success else {"error": result.error})
 
@@ -562,6 +576,7 @@ class DAGExecutor:
         results_so_far: dict[str, NodeResult],
         incoming: list[AgentMessage],
         bus: MessageBus,
+        node_agent_trace: AgentTrace | None = None,
     ) -> dict:
         """根据节点 memory_scope 构建 context。
 
@@ -574,6 +589,7 @@ class DAGExecutor:
         base = {
             "incoming_messages": incoming,
             "message_bus": bus,
+            "_agent_trace": node_agent_trace,
         }
 
         if scope == "none":

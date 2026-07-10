@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import json
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Optional, Callable, Awaitable
+
+from agentflow.runtime.hooks import StreamEvent
+from agentflow.trace.tracer import AgentTrace, AgentTurn, ToolCallRecord
 
 
 @dataclass
@@ -18,9 +23,18 @@ class ThinkContext:
     memory: object
     max_iterations: int = 10
     feedback: list[str] = field(default_factory=list)
+    stream: Optional[Callable[[StreamEvent], Awaitable[None]]] = None
+    skill_tool_map: dict[str, str] = field(default_factory=dict)  # activate_skill:xxx → skill_name
+    agent_trace: Optional[AgentTrace] = None  # 思考引擎逐轮填充的追踪数据
+    _skills_map: dict = field(default_factory=dict)  # skill_name → Skill（内部用）
 
     def add_feedback(self, suggestions: list[str]) -> None:
         self.feedback.extend(suggestions)
+
+    async def emit(self, event: StreamEvent) -> None:
+        """发送流式事件。如果设置了 stream 回调则调用。"""
+        if self.stream:
+            await self.stream(event)
 
 
 @dataclass
@@ -48,6 +62,42 @@ class ThinkingStrategy(ABC):
     async def run(self, context: ThinkContext) -> ThinkResult:
         ...
 
+    async def _handle_skill_activation(
+        self, skill_name: str, context: ThinkContext, messages: list
+    ) -> str:
+        """拦截 skill 激活调用——懒加载 Skill body 并注入到下一轮。"""
+        # 从 memory 或 builder 传下的 skills 中查找
+        # Skill 对象通过 context 传入
+        skill = getattr(context, '_skills_map', {}).get(skill_name)
+        if skill is None:
+            return f"Skill '{skill_name}' not found."
+
+        if skill._loaded:
+            return f"Skill '{skill_name}' is already active."
+
+        await skill.ensure_loaded()
+
+        # 注入 Skill 内容到下一轮的 system prompt
+        skill_prompt = f"[Activated Skill: {skill.name}]\n{skill.prompt}"
+        messages.append({
+            "role": "system",
+            "content": skill_prompt,
+        })
+
+        # 如果 skill 有 steps，注入步骤约束
+        if skill.steps:
+            steps_desc = "\n".join(
+                f"{i+1}. {s.name}: {s.description} "
+                f"(allowed tools: {s.allowed_tools or 'none'})"
+                for i, s in enumerate(skill.steps)
+            )
+            messages.append({
+                "role": "system",
+                "content": f"[Skill Steps]\n{steps_desc}",
+            })
+
+        return f"Skill '{skill_name}' activated. Content loaded and injected into context."
+
     async def _execute_tool_loop(
         self, context: ThinkContext, messages: list, tools_param: list | None
     ) -> "tuple[str, list[dict]]":
@@ -69,11 +119,29 @@ class ThinkingStrategy(ABC):
             每个 tool_call 格式为 {"tool": name, "input": dict, "output": str}
         """
         tool_calls_made = []
+        trace = context.agent_trace
 
-        for _ in range(context.max_iterations):
+        for i in range(context.max_iterations):
+            t_turn_start = time.monotonic()
+
             response = await context.llm_client.chat(messages, tools=tools_param)
 
             if response.tool_calls:
+                # 记录一轮 trace
+                if trace:
+                    turn = AgentTurn(
+                        turn=i + 1,
+                        thinking=response.content or f"Decided to call: {[tc['function']['name'] for tc in response.tool_calls]}",
+                    )
+                    trace.turns.append(turn)
+                    trace.total_turns = len(trace.turns)
+                # 流式：发送思考事件
+                await context.emit(StreamEvent(
+                    type="thinking",
+                    content=response.content or f"Calling tools: {[tc['function']['name'] for tc in response.tool_calls]}",
+                    data={"iteration": i, "tool_calls": [tc["function"]["name"] for tc in response.tool_calls]},
+                ))
+
                 # 记录 assistant 的 tool_calls 到消息历史
                 messages.append({
                     "role": "assistant",
@@ -85,12 +153,48 @@ class ThinkingStrategy(ABC):
                     func_name = tc["function"]["name"]
                     func_args = json.loads(tc["function"]["arguments"])
 
-                    # 通过 toolkit 执行（如果有）
-                    if self.toolkit:
+                    # 流式：发送工具调用事件
+                    await context.emit(StreamEvent(
+                        type="tool_call",
+                        content=f"Calling {func_name}...",
+                        data={"tool": func_name, "input": func_args},
+                    ))
+
+                    # 拦截 skill 激活调用
+                    t_tool_start = time.monotonic()
+                    if func_name in context.skill_tool_map:
+                        skill_name = context.skill_tool_map[func_name]
+                        tool_output = await self._handle_skill_activation(
+                            skill_name, context, messages
+                        )
+                        tool_success = True
+                    elif self.toolkit:
                         result = await self.toolkit.execute(func_name, func_args)
                         tool_output = result.output if result.success else result.error
+                        tool_success = result.success
                     else:
                         tool_output = f"[No toolkit] Called {func_name}({func_args})"
+                        tool_success = True
+
+                    t_tool_dur = int((time.monotonic() - t_tool_start) * 1000)
+
+                    # 记录工具调用 trace
+                    if trace and trace.turns:
+                        trace.turns[-1].tool_calls.append(ToolCallRecord(
+                            tool=func_name if func_name not in context.skill_tool_map else f"skill:{context.skill_tool_map[func_name]}",
+                            input=func_args,
+                            output=tool_output[:500],
+                            success=tool_success,
+                            duration_ms=t_tool_dur,
+                        ))
+                        trace.total_tool_calls += 1
+
+                    # 流式：发送工具结果事件
+                    await context.emit(StreamEvent(
+                        type="tool_result",
+                        content=tool_output[:200],
+                        data={"tool": func_name, "output": tool_output, "success": True},
+                    ))
 
                     tool_calls_made.append({
                         "tool": func_name,
@@ -104,9 +208,37 @@ class ThinkingStrategy(ABC):
                         "tool_call_id": tc.get("id", ""),
                     })
             else:
-                # 无 tool_calls → 最终响应，追加到消息历史
+                # 无 tool_calls → 最终响应
                 messages.append({"role": "assistant", "content": response.content})
+                # 记录最终回答 trace
+                if trace and trace.turns:
+                    trace.turns[-1].final_answer = response.content
+                elif trace:
+                    # 没有工具调用的情况下直接回答
+                    trace.turns.append(AgentTurn(
+                        turn=1,
+                        final_answer=response.content,
+                    ))
+                    trace.total_turns = 1
+                # 填写汇总
+                if trace:
+                    if hasattr(response, 'usage') and response.usage:
+                        trace.total_tokens = response.usage.get("total_tokens", 0)
+                    trace.success = True
+                # 流式：发送最终答案事件
+                await context.emit(StreamEvent(
+                    type="final",
+                    content=response.content[:200],
+                    data={"iterations": i + 1},
+                ))
                 return response.content, tool_calls_made
 
-        # max_iterations 耗尽时的兜底返回（最后一条是 tool 消息）
+        # max_iterations 耗尽时的兜底返回
+        if trace:
+            trace.success = False
+            trace.error = "Reached max iterations without final answer"
+        await context.emit(StreamEvent(
+            type="error",
+            content="Agent reached maximum iterations without a final answer.",
+        ))
         return messages[-1].get("content", ""), tool_calls_made
