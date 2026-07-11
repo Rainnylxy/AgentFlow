@@ -299,7 +299,7 @@ class TestAgentTraceRecording:
             # 第1轮：激活 skill
             MagicMock(content=None, role="assistant", tool_calls=[{
                 "id": "c1", "type": "function",
-                "function": {"name": "activate_skill:helper", "arguments": "{}"},
+                "function": {"name": "use_skill_helper", "arguments": "{}"},
             }]),
             # 第2轮：最终回答
             MagicMock(content="Done with skill.", role="assistant", tool_calls=[]),

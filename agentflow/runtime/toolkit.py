@@ -173,6 +173,9 @@ class ToolKit:
         self._registry.register(tool_)
         return self
 
+    def has(self, name: str) -> bool:
+        return self._registry.has(name)
+
     def list(self) -> List[Tool]:
         return self._registry.list_tools()
 

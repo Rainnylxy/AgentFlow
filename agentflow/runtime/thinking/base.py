@@ -24,7 +24,7 @@ class ThinkContext:
     max_iterations: int = 10
     feedback: list[str] = field(default_factory=list)
     stream: Optional[Callable[[StreamEvent], Awaitable[None]]] = None
-    skill_tool_map: dict[str, str] = field(default_factory=dict)  # activate_skill:xxx → skill_name
+    skill_tool_map: dict[str, str] = field(default_factory=dict)  # use_skill_xxx → skill_name
     agent_trace: Optional[AgentTrace] = None  # 思考引擎逐轮填充的追踪数据
     _skills_map: dict = field(default_factory=dict)  # skill_name → Skill（内部用）
 
@@ -77,9 +77,9 @@ class ThinkingStrategy(ABC):
 
         await skill.ensure_loaded()
 
-        # 注入 Skill 内容到下一轮的 system prompt
+        # 注入 Skill 内容到 system prompt 区域（不插在 tool_calls 和 tool 结果之间）
         skill_prompt = f"[Activated Skill: {skill.name}]\n{skill.prompt}"
-        messages.append({
+        messages.insert(1, {
             "role": "system",
             "content": skill_prompt,
         })
@@ -91,7 +91,7 @@ class ThinkingStrategy(ABC):
                 f"(allowed tools: {s.allowed_tools or 'none'})"
                 for i, s in enumerate(skill.steps)
             )
-            messages.append({
+            messages.insert(2, {
                 "role": "system",
                 "content": f"[Skill Steps]\n{steps_desc}",
             })
@@ -181,7 +181,7 @@ class ThinkingStrategy(ABC):
                     # 记录工具调用 trace
                     if trace and trace.turns:
                         trace.turns[-1].tool_calls.append(ToolCallRecord(
-                            tool=func_name if func_name not in context.skill_tool_map else f"skill:{context.skill_tool_map[func_name]}",
+                            tool=func_name,
                             input=func_args,
                             output=tool_output[:500],
                             success=tool_success,

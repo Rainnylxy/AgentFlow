@@ -190,7 +190,7 @@ class _BuiltAgent(BaseAgent):
         self._skills: list = skills or []
 
     def _register_skill_activation_tools(self) -> dict[str, str]:
-        """为每个未加载的 Skill 注册 activate_skill:xxx 工具。
+        """为每个未加载的 Skill 注册 use_skill_xxx 工具。
 
         返回 {tool_name: skill_name} 映射表，供拦截使用。
         """
@@ -198,12 +198,16 @@ class _BuiltAgent(BaseAgent):
         for skill in self._skills:
             if skill._loaded:
                 continue
-            tool_name = f"activate_skill:{skill.name}"
+            tool_name = f"use_skill_{skill.name}"
+            if self.toolkit.has(tool_name):
+                mapping[tool_name] = skill.name
+                continue
             self.toolkit.add(Tool(
                 name=tool_name,
                 description=f"激活「{skill.name}」能力：{skill.description}。当需要 {skill.name} 相关能力时调用。",
                 tool_type=ToolType.LOCAL,
-                func=None,  # 拦截执行，不走正常 func 调用
+                func=None,
+                parameters={"type": "object", "properties": {}, "required": []},
             ))
             mapping[tool_name] = skill.name
         return mapping

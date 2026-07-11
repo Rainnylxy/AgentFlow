@@ -48,6 +48,9 @@ class ToolRegistry:
     def get(self, name: str) -> Optional[Tool]:
         return self._tools.get(name)
 
+    def has(self, name: str) -> bool:
+        return name in self._tools
+
     def list_tools(self) -> list[Tool]:
         return list(self._tools.values())
 
