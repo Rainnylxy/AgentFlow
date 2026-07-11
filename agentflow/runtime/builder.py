@@ -246,6 +246,18 @@ class _BuiltAgent(BaseAgent):
         """
         self.reference.remove(key)
 
+    def remember(self, key: str, content: str) -> None:
+        """存入语义记忆（Semantic Memory）。
+
+        agent.run() 的 pre_turn 阶段会自动根据 user_input 做关键词检索，
+        匹配到的语义记忆会以 [Memory] system message 形式注入上下文。
+
+        Args:
+            key: 记忆标识（如 "user_name", "preference"）
+            content: 记忆内容文本
+        """
+        self.memory.semantic.store(key, content)
+
     async def run(self, user_input: str, stream=None, agent_trace=None) -> AgentResult:
         """执行 Agent。
 
