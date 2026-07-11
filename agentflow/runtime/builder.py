@@ -20,6 +20,7 @@ from agentflow.runtime.thinking import ThinkingEngine, ThinkingMode, ThinkContex
 from agentflow.runtime.toolkit import ToolKit, Tool
 from agentflow.runtime.tool_registry import ToolType
 from agentflow.runtime.memory.manager import MemoryManager, MemoryProfile
+from agentflow.runtime.memory.reference import Reference
 from agentflow.runtime.prompt import PromptTemplate
 from agentflow.runtime.prompt.section import Section
 from agentflow.runtime.skill import Skill, SkillLoader
@@ -64,6 +65,7 @@ class AgentBuilder:
         self._system_prompt_str = None
         self._skills_dir = Path("skills")  # 默认 skills/ 目录
         self._skill_names: list[str] = []
+        self._reference = Reference()  # 参考卡，跨 run 持久，永不裁剪
 
     def with_llm(self, llm_client) -> "AgentBuilder":
         self._llm_client = llm_client
@@ -110,6 +112,19 @@ class AgentBuilder:
     def with_skills_dir(self, directory: "str | Path") -> "AgentBuilder":
         """设置 Skill 文件目录，默认为 skills/。"""
         self._skills_dir = Path(directory)
+        return self
+
+    def with_reference(self, key: str, content: str) -> "AgentBuilder":
+        """添加一条参考卡（Reference）。
+
+        Reference 跨 agent.run() 持久化，永不参与滑动窗口裁剪。
+        适用于角色设定、世界观、项目约定等长期上下文。
+
+        Args:
+            key: 参考条目标识（如 "characters", "style", "summary"）
+            content: 参考内容文本
+        """
+        self._reference.set(key, content)
         return self
 
     def with_max_iterations(self, n: int) -> "AgentBuilder":
@@ -166,6 +181,7 @@ class AgentBuilder:
             thinking_engine=thinking_engine,
             max_iterations=self._max_iterations,
             skills=skills,
+            reference=self._reference,
         )
 
 
@@ -176,7 +192,7 @@ class _BuiltAgent(BaseAgent):
     Skill 激活采用真实懒加载——LLM 调用 activate_skill:xxx 工具时才加载。
     """
 
-    def __init__(self, name, llm_client, system_prompt, toolkit, memory, thinking_engine, max_iterations, skills=None):
+    def __init__(self, name, llm_client, system_prompt, toolkit, memory, thinking_engine, max_iterations, skills=None, reference=None):
         super().__init__(
             name=name,
             llm_client=llm_client,
@@ -188,6 +204,7 @@ class _BuiltAgent(BaseAgent):
         self.thinking_engine = thinking_engine
         self.toolkit = toolkit
         self._skills: list = skills or []
+        self.reference: Reference = reference or Reference()
 
     def _register_skill_activation_tools(self) -> dict[str, str]:
         """为每个未加载的 Skill 注册 use_skill_xxx 工具。
@@ -211,6 +228,23 @@ class _BuiltAgent(BaseAgent):
             ))
             mapping[tool_name] = skill.name
         return mapping
+
+    def update_reference(self, key: str, content: str) -> None:
+        """更新一条参考卡内容。跨 agent.run() 持久化，永不裁剪。
+
+        Args:
+            key: 参考条目标识
+            content: 新的参考内容
+        """
+        self.reference.set(key, content)
+
+    def remove_reference(self, key: str) -> None:
+        """删除一条参考卡。
+
+        Args:
+            key: 参考条目标识
+        """
+        self.reference.remove(key)
 
     async def run(self, user_input: str, stream=None, agent_trace=None) -> AgentResult:
         """执行 Agent。
@@ -255,6 +289,7 @@ class _BuiltAgent(BaseAgent):
             stream=stream,
             skill_tool_map=skill_tool_map,
             agent_trace=agent_trace,
+            reference_messages=self.reference.to_messages(),
         )
         # 将 Skill 对象注入 context，供拦截器查找
         context._skills_map = {s.name: s for s in self._skills}

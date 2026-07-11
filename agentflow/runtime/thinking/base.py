@@ -26,6 +26,7 @@ class ThinkContext:
     stream: Optional[Callable[[StreamEvent], Awaitable[None]]] = None
     skill_tool_map: dict[str, str] = field(default_factory=dict)  # use_skill_xxx → skill_name
     agent_trace: Optional[AgentTrace] = None  # 思考引擎逐轮填充的追踪数据
+    reference_messages: list[dict] = field(default_factory=list)  # Reference 参考卡消息，永不裁剪，策略需注入在 system prompt 之后
     _skills_map: dict = field(default_factory=dict)  # skill_name → Skill（内部用）
 
     def add_feedback(self, suggestions: list[str]) -> None:

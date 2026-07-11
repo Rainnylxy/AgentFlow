@@ -37,6 +37,10 @@ class ReActStrategy(ThinkingStrategy):
         system_content = REACT_SYSTEM_PROMPT + "\n\n" + context.system_prompt
         messages = [{"role": "system", "content": system_content}]
 
+        # 注入 Reference 参考卡（pinned，永不裁剪）
+        for ref_msg in context.reference_messages:
+            messages.append(dict(ref_msg))
+
         # 注入已有消息历史
         for msg in context.messages:
             msg_dict = {"role": msg.role, "content": msg.content}

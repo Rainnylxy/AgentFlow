@@ -18,14 +18,14 @@ class CoTStrategy(ThinkingStrategy):
         tools_param = context.tools if context.tools else None
 
         # Phase 1: Deep thinking
-        think_messages = [
-            {"role": "system", "content": context.system_prompt},
-            {"role": "user", "content": (
-                f"Question: {context.user_input}\n\n"
-                "Think through this step by step. Consider all angles, "
-                "break down the problem, and reason carefully before arriving at a conclusion."
-            )},
-        ]
+        think_messages = [{"role": "system", "content": context.system_prompt}]
+        for ref_msg in context.reference_messages:
+            think_messages.append(dict(ref_msg))
+        think_messages.append({"role": "user", "content": (
+            f"Question: {context.user_input}\n\n"
+            "Think through this step by step. Consider all angles, "
+            "break down the problem, and reason carefully before arriving at a conclusion."
+        )})
         think_text, think_tool_calls = await self._execute_tool_loop(
             context, think_messages, tools_param
         )
@@ -33,14 +33,16 @@ class CoTStrategy(ThinkingStrategy):
         all_tool_calls.extend(think_tool_calls)
 
         # Phase 2: Final answer
-        answer_messages = [
-            {"role": "system", "content": context.system_prompt},
+        answer_messages = [{"role": "system", "content": context.system_prompt}]
+        for ref_msg in context.reference_messages:
+            answer_messages.append(dict(ref_msg))
+        answer_messages.extend([
             {"role": "user", "content": think_text},
             {"role": "user", "content": (
                 "Based on your reasoning above, give the final answer. "
                 "Call any necessary tools to finalize."
             )},
-        ]
+        ])
         answer_text, answer_tool_calls = await self._execute_tool_loop(
             context, answer_messages, tools_param
         )

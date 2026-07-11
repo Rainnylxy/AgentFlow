@@ -2,6 +2,7 @@ from agentflow.runtime.memory.working import WorkingMemory, Message
 from agentflow.runtime.memory.episodic import EpisodicMemory, MemoryFact
 from agentflow.runtime.memory.semantic import SemanticMemory
 from agentflow.runtime.memory.manager import MemoryManager, MemoryProfile, WorkingConfig
+from agentflow.runtime.memory.reference import Reference
 
 
 class ShortTermMemory(WorkingMemory):
@@ -39,4 +40,5 @@ __all__ = [
     "SemanticMemory",
     "MemoryManager", "MemoryProfile", "WorkingConfig",
     "ShortTermMemory", "LongTermMemory",
+    "Reference",
 ]

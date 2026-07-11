@@ -19,13 +19,13 @@ class PlanExecuteStrategy(ThinkingStrategy):
         tools_param = context.tools if context.tools else None
 
         # Phase 1: Plan
-        plan_messages = [
-            {"role": "system", "content": context.system_prompt},
-            {"role": "user", "content": (
-                f"Task: {context.user_input}\n\n"
-                "Break this down into clear steps. Output as a numbered plan."
-            )},
-        ]
+        plan_messages = [{"role": "system", "content": context.system_prompt}]
+        for ref_msg in context.reference_messages:
+            plan_messages.append(dict(ref_msg))
+        plan_messages.append({"role": "user", "content": (
+            f"Task: {context.user_input}\n\n"
+            "Break this down into clear steps. Output as a numbered plan."
+        )})
         plan_text, plan_tool_calls = await self._execute_tool_loop(
             context, plan_messages, tools_param
         )
@@ -33,15 +33,15 @@ class PlanExecuteStrategy(ThinkingStrategy):
         all_tool_calls.extend(plan_tool_calls)
 
         # Phase 2: Execute
-        execute_messages = [
-            {"role": "system", "content": context.system_prompt},
-            {"role": "user", "content": (
-                f"Task: {context.user_input}\n\n"
-                f"Plan:\n{plan_text}\n\n"
-                "Execute the plan step by step. For each step, describe what you did "
-                "and the result. You can call tools if needed."
-            )},
-        ]
+        execute_messages = [{"role": "system", "content": context.system_prompt}]
+        for ref_msg in context.reference_messages:
+            execute_messages.append(dict(ref_msg))
+        execute_messages.append({"role": "user", "content": (
+            f"Task: {context.user_input}\n\n"
+            f"Plan:\n{plan_text}\n\n"
+            "Execute the plan step by step. For each step, describe what you did "
+            "and the result. You can call tools if needed."
+        )})
         execute_text, execute_tool_calls = await self._execute_tool_loop(
             context, execute_messages, tools_param
         )
@@ -49,15 +49,15 @@ class PlanExecuteStrategy(ThinkingStrategy):
         all_tool_calls.extend(execute_tool_calls)
 
         # Phase 3: Finalize
-        finalize_messages = [
-            {"role": "system", "content": context.system_prompt},
-            {"role": "user", "content": (
-                f"Task: {context.user_input}\n\n"
-                f"Execution results:\n{execute_text}\n\n"
-                "Finalize the result. Call any necessary tools to save or export "
-                "the final output."
-            )},
-        ]
+        finalize_messages = [{"role": "system", "content": context.system_prompt}]
+        for ref_msg in context.reference_messages:
+            finalize_messages.append(dict(ref_msg))
+        finalize_messages.append({"role": "user", "content": (
+            f"Task: {context.user_input}\n\n"
+            f"Execution results:\n{execute_text}\n\n"
+            "Finalize the result. Call any necessary tools to save or export "
+            "the final output."
+        )})
         final_text, final_tool_calls = await self._execute_tool_loop(
             context, finalize_messages, tools_param
         )
