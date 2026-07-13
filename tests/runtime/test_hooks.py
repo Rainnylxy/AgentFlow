@@ -290,6 +290,7 @@ class TestAgentTraceRecording:
         assert turn0.tool_calls[0].input == {"q": "refund"}
         assert "Found" in turn0.tool_calls[0].output
         assert turn0.finish_reason == "tool_calls" or turn0.finish_reason == "stop"
+        assert hasattr(turn0, 'reasoning')  # reasoning 字段存在（正常为空或 LLM 返回的思考链）
         assert turn0.tokens.get("total_tokens", 0) > 0
         # messages_snapshot 记录了 LLM 调用前的完整上下文
         assert len(turn0.messages_snapshot) >= 2  # system + user

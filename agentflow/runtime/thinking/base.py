@@ -142,6 +142,7 @@ class ThinkingStrategy(ABC):
                 # 回填本轮思考内容和 LLM 响应元信息
                 if trace:
                     trace.turns[-1].thinking = response.content or f"Decided to call: {[tc['function']['name'] for tc in response.tool_calls]}"
+                    trace.turns[-1].reasoning = response.reasoning_content
                     trace.turns[-1].finish_reason = response.finish_reason
                     trace.turns[-1].tokens = dict(response.usage) if response.usage else {}
                 # 流式：发送思考事件
@@ -222,6 +223,7 @@ class ThinkingStrategy(ABC):
                 # 回填最终回答 + LLM 响应元信息到当前 turn
                 if trace:
                     trace.turns[-1].final_answer = response.content
+                    trace.turns[-1].reasoning = response.reasoning_content
                     trace.turns[-1].finish_reason = response.finish_reason
                     trace.turns[-1].tokens = dict(response.usage) if response.usage else {}
                 # 填写汇总

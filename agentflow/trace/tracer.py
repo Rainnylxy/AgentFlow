@@ -37,6 +37,7 @@ class AgentTurn:
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
     final_answer: str = ""                # 如果这轮给出了最终答案
     finish_reason: str = ""               # LLM 结束原因: stop, length, tool_calls, content_filter
+    reasoning: str = ""                   # 模型的思考/推理过程（DeepSeek R1, OpenAI o1）
     tokens: dict = field(default_factory=dict)  # {prompt_tokens, completion_tokens, total_tokens}
     duration_ms: int = 0
     messages_snapshot: list[dict] = field(default_factory=list)  # 本轮 LLM 调用前的完整 messages
@@ -92,6 +93,7 @@ class AgentTrace:
                         for tc in t.tool_calls
                     ],
                     "finish_reason": t.finish_reason,
+                    "reasoning": t.reasoning,
                     "tokens": t.tokens,
                     "duration_ms": t.duration_ms,
                     "messages_snapshot": t.messages_snapshot,

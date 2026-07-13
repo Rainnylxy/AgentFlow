@@ -32,6 +32,7 @@ class LLMResponse:
     role: str = "assistant"
     tool_calls: list = field(default_factory=list)
     finish_reason: str = ""  # stop, length, tool_calls, content_filter
+    reasoning_content: str = ""  # 模型的思考/推理过程（DeepSeek R1, OpenAI o1 等）
     usage: dict = field(default_factory=dict)  # {prompt_tokens, completion_tokens, total_tokens}
 
 
@@ -197,11 +198,15 @@ class OpenAIClient(LLMClient):
                 for tc in msg.tool_calls
             ]
 
+        # 提取 reasoning_content（DeepSeek R1 / OpenAI o1 的思考链）
+        reasoning = getattr(msg, 'reasoning_content', '') or ''
+
         return LLMResponse(
             content=msg.content or "",
             role=msg.role,
             tool_calls=tool_calls,
             finish_reason=getattr(choice, 'finish_reason', '') or '',
+            reasoning_content=reasoning,
             usage={
                 "prompt_tokens": completion.usage.prompt_tokens,
                 "completion_tokens": completion.usage.completion_tokens,
