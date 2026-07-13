@@ -126,11 +126,12 @@ class ThinkingStrategy(ABC):
         for i in range(context.max_iterations):
             t_turn_start = time.monotonic()
 
-            # 每轮开始：创建 turn 并捕获完整 messages 快照（LLM 调用前的上下文）
+            # 每轮开始：创建 turn 并捕获完整上下文快照（LLM 调用前的 messages + tools）
             if trace:
                 turn = AgentTurn(
                     turn=i + 1,
                     messages_snapshot=copy.deepcopy(messages),
+                    tools_snapshot=copy.deepcopy(tools_param) if tools_param else [],
                 )
                 trace.turns.append(turn)
                 trace.total_turns = len(trace.turns)

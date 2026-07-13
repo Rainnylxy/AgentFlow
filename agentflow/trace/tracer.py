@@ -40,6 +40,7 @@ class AgentTurn:
     tokens: dict = field(default_factory=dict)  # {prompt_tokens, completion_tokens, total_tokens}
     duration_ms: int = 0
     messages_snapshot: list[dict] = field(default_factory=list)  # 本轮 LLM 调用前的完整 messages
+    tools_snapshot: list[dict] = field(default_factory=list)     # 本轮 LLM 可用的工具定义
 
 
 @dataclass
@@ -195,6 +196,7 @@ class WorkflowTrace:
                             "tokens": t.tokens,
                             "duration_ms": t.duration_ms,
                             "messages_snapshot": t.messages_snapshot,
+                            "tools_snapshot": t.tools_snapshot,
                         }
                         for t in at.turns
                     ],

@@ -293,6 +293,8 @@ class TestAgentTraceRecording:
         assert turn0.tokens.get("total_tokens", 0) > 0
         # messages_snapshot 记录了 LLM 调用前的完整上下文
         assert len(turn0.messages_snapshot) >= 2  # system + user
+        # tools_snapshot 记录了 LLM 可用的工具定义
+        assert len(turn0.tools_snapshot) >= 1  # 至少 search 工具
 
         # 验证 turn 1: final answer
         turn1 = at.turns[1]
@@ -300,6 +302,7 @@ class TestAgentTraceRecording:
         assert turn1.finish_reason == "stop"
         assert turn1.tokens.get("total_tokens", 0) > 0
         assert len(turn1.messages_snapshot) >= 4  # system + user + assistant(tool_call) + tool_result
+        assert len(turn1.tools_snapshot) >= 1  # 同样有工具可用
 
         # 验证 AgentTrace 汇总 token 正确聚合
         assert at.total_tokens.get("total_tokens", 0) > 0
