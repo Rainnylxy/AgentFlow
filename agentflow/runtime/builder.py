@@ -229,8 +229,29 @@ class _BuiltAgent(BaseAgent):
             mapping[tool_name] = skill.name
         return mapping
 
+    def set_prompt(self, prompt: str) -> None:
+        """修改 system prompt（build 之后也可调用）。
+
+        直接覆盖已渲染的系统提示词。下次 agent.run() 生效。
+
+        Args:
+            prompt: 新的系统提示词字符串
+        """
+        self.system_prompt = prompt
+
+    def set_reference(self, key: str, content: str) -> None:
+        """设置一条参考卡。跨 agent.run() 持久化，永不裁剪。
+
+        与 update_reference 等价，语义上更符合"首次设置"的场景。
+
+        Args:
+            key: 参考条目标识（如 "characters", "style"）
+            content: 参考内容文本
+        """
+        self.reference.set(key, content)
+
     def update_reference(self, key: str, content: str) -> None:
-        """更新一条参考卡内容。跨 agent.run() 持久化，永不裁剪。
+        """更新一条参考卡。与 set_reference 等价，语义上强调"更新已有条目"。
 
         Args:
             key: 参考条目标识
@@ -245,6 +266,10 @@ class _BuiltAgent(BaseAgent):
             key: 参考条目标识
         """
         self.reference.remove(key)
+
+    def clear_references(self) -> None:
+        """清空所有参考卡。"""
+        self.reference.clear()
 
     def remember(self, key: str, content: str) -> None:
         """存入语义记忆（Semantic Memory）。

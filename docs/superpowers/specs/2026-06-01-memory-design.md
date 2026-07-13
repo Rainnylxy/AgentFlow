@@ -27,6 +27,7 @@ Layer 3: Semantic Memory  ─→  长期知识，向量检索
 **存什么**：当前对话的完整消息列表（`Message` 对象）。
 
 **能力**：
+
 - 滑动窗口管理（超出上限自动截断最旧消息）
 - 支持消息类型标记（user / assistant / tool / system）
 - 为每一轮标注 tool_call_id 关联
@@ -89,6 +90,7 @@ Agent 空闲时 / 每次 run() 启动时：
 ```
 
 **存储后端**：
+
 - 默认：Chroma（本地文件，零配置）
 - 可选：Pinecone / Weaviate / PostgreSQL pgvector
 
@@ -155,11 +157,11 @@ class MemoryProfile:
 
 ## 六、与现有代码的关系
 
-| 现有模块 | 处理 |
-|----------|------|
-| `memory.py` (MemoryManager) | 完全重写，同名兼容 |
-| `Message` dataclass | 保留，作为 Working Memory 基本单元 |
-| Episodic / Semantic | 全新模块 |
+| 现有模块                    | 处理                               |
+| --------------------------- | ---------------------------------- |
+| `memory.py` (MemoryManager) | 完全重写，同名兼容                 |
+| `Message` dataclass         | 保留，作为 Working Memory 基本单元 |
+| Episodic / Semantic         | 全新模块                           |
 
 ## 七、待定内容
 

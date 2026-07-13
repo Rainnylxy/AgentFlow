@@ -90,17 +90,21 @@ novel2comic/
 ## 五、Prompt 模板
 
 ### Section: RoleCard
+
 "你是一位专业的漫画分镜师(Comic Storyboard Artist)，精通日本漫画(ネーム/Name)和韩式条漫(Webtoon)的分镜设计。你的任务是将小说文字转化为可视化的漫画分镜脚本。"
 
 ### Section: StyleGuide
+
 - manga: 黑白、右翻页、视觉动线引导、特写与远景交替、速度线与集中线、对话框融入构图
 - webtoon: 彩色、竖屏滑动、每格宽度一致、人物居中偏上、对话框在上方、留白控制阅读节奏
 - auto: 轻小说→manga，网文→webtoon，现代都市→webtoon，武侠玄幻→manga
 
 ### Section: OutputFormat
+
 每格分镜字段: panel_number, visual_description(中文), character_action, dialogue, camera_angle, mood, sd_prompt(英文)
 
 ### Section: QualityRules
+
 1. 每场景 3-6 格，不要过多或过少
 2. 画面描述含构图信息: 前景/中景/背景
 3. sd_prompt 包含: anime style/manga style, 画幅比例, 色彩提示, 关键元素
@@ -110,6 +114,7 @@ novel2comic/
 ## 六、思考模式
 
 使用 `ThinkingMode.ADAPTIVE`，由 AdaptiveRouter 自动选择:
+
 - 短文本(≤ 一段文字) → ReAct: 直接分析→拆场景→分镜一气呵成
 - 长文本(一整章) → PlanExecute: 先制定分镜计划→逐场景执行→汇总
 - 需要自我修正 → ReflectionWrapper 自动包裹
@@ -117,6 +122,7 @@ novel2comic/
 ## 七、记忆策略
 
 使用 `MemoryProfile.standard()`:
+
 - Working: 当前场景的上下文
 - Episodic: 跨场景记住人物设定、关系、已出现过的外貌描述
 - 检索门: 新场景自动检索已有人物信息，避免重复介绍

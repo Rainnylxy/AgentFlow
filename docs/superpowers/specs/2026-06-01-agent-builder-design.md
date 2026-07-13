@@ -49,6 +49,7 @@ agent = (AgentBuilder("support-agent")
 **做什么**：让工具定义从"手写样板代码"变成"装饰器一键注册"，同时统一本地函数、MCP Server、REST API 三种工具源。
 
 **核心能力**：
+
 - `@tool` 装饰器：从函数签名 + docstring 自动推导 Tool schema，Pydantic 做参数校验
 - 三源统一：本地函数、MCP、REST 三种工具对 Agent 透明
 - 自动 Schema 生成：将注册的工具转为 OpenAI function-calling 格式
@@ -60,6 +61,7 @@ agent = (AgentBuilder("support-agent")
 **做什么**：将简单的消息列表升级为三层记忆系统（工作/情节/语义），Agent 自主决定记忆、遗忘、检索。
 
 **核心能力**：
+
 - 三层模型：Working（当前对话）+ Episodic（跨会话结构化事实）+ Semantic（长期向量检索）
 - 结构化存储：不存原始文本，提取为 `MemoryFact`（主体-谓词-客体-置信度）
 - 自主管理：记忆门（记住什么）、遗忘门（淘汰什么）、检索门（需要什么）全程自动
@@ -71,6 +73,7 @@ agent = (AgentBuilder("support-agent")
 **做什么**：将手写 system_prompt 字符串变成模块化拼装，不同 Agent 复用不同模块。
 
 **核心能力**：
+
 - Section 模块化：角色卡、工具册、规则集、示例集各自独立
 - Jinja2 模板渲染：变量注入 + 条件逻辑
 - 内置模板库 + 自定义注册
@@ -83,6 +86,7 @@ agent = (AgentBuilder("support-agent")
 **做什么**：让 Agent 支持多种思考模式（ReAct / Plan-Execute / CoT），具备自适应选择和反思自修正能力。
 
 **核心能力**：
+
 - 四种策略：ReAct、Plan-Execute、CoT（链式思考）、Reflection（反思装饰器）
 - 自适应路由：根据任务信号自动选择最优策略
 - 反思自修正：事实核查 + 完备性检查 + 策略调整
@@ -121,13 +125,13 @@ agentflow/runtime/
 
 ## 六、与现有代码的关系
 
-| 现有模块 | 处理方式 |
-|----------|----------|
-| `tool_registry.py` | 保留并扩展，增加 MCP/REST 执行器 |
-| `memory.py` | 重写为 memory/ 子包，保持同名接口兼容 |
-| `react_agent.py` | 逻辑迁移到 thinking/react.py |
-| `agent.py` (BaseAgent) | 保留，简化为容器 + 委托 |
-| `llm_client.py` | 不变，仍作为 LLM 调用抽象层 |
+| 现有模块               | 处理方式                              |
+| ---------------------- | ------------------------------------- |
+| `tool_registry.py`     | 保留并扩展，增加 MCP/REST 执行器      |
+| `memory.py`            | 重写为 memory/ 子包，保持同名接口兼容 |
+| `react_agent.py`       | 逻辑迁移到 thinking/react.py          |
+| `agent.py` (BaseAgent) | 保留，简化为容器 + 委托               |
+| `llm_client.py`        | 不变，仍作为 LLM 调用抽象层           |
 
 ## 七、设计原则
 

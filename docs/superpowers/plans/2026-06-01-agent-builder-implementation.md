@@ -9,6 +9,7 @@
 **Tech Stack:** Python 3.10+, Pydantic, Jinja2, pytest + pytest-asyncio, Chroma (optional)
 
 **Specs:**
+
 - [[2026-06-01-agent-builder-design]]
 - [[2026-06-01-toolkit-design]]
 - [[2026-06-01-memory-design]]
@@ -67,6 +68,7 @@ Remove (logic migrated, not deleted):
 ### Task 1.1: Pydantic 参数模型 + Tool 扩展
 
 **Files:**
+
 - Modify: `agentflow/runtime/tool_registry.py`
 - Test: `tests/runtime/test_tool_registry.py` (existing, add cases)
 
@@ -171,6 +173,7 @@ git commit -m "feat(tool): add Pydantic param validation and MCP/REST execute su
 ### Task 1.2: `@tool` 装饰器
 
 **Files:**
+
 - Create: `agentflow/runtime/toolkit.py`
 - Test: `tests/runtime/test_toolkit.py`
 
@@ -465,6 +468,7 @@ git commit -m "feat(toolkit): add @tool decorator and ToolKit container"
 ### Task 2.1: Working Memory（工作记忆）
 
 **Files:**
+
 - Create: `agentflow/runtime/memory/__init__.py` (package init, empty for now)
 - Create: `agentflow/runtime/memory/working.py`
 - Test: `tests/runtime/test_memory_working.py`
@@ -536,7 +540,7 @@ class Message:
 
 class WorkingMemory:
     """Layer 1: 工作记忆 — 当前对话的完整消息窗口。
-    
+
     支持滑动窗口（按轮数截断）和 token 限制（按字符估算截断）。
     """
 
@@ -555,7 +559,7 @@ class WorkingMemory:
 
     def get_context_window(self, roles: set[str] | None = None) -> list[Message]:
         """获取对话窗口，按 token 限制从后向前截取。
-        
+
         Args:
             roles: 可选的角色过滤集合，如 {"user", "assistant"}
         """
@@ -586,6 +590,7 @@ class WorkingMemory:
 ### Task 2.2: Episodic Memory（情节记忆）
 
 **Files:**
+
 - Create: `agentflow/runtime/memory/episodic.py`
 - Test: `tests/runtime/test_memory_episodic.py`
 
@@ -765,6 +770,7 @@ class EpisodicMemory:
 ### Task 2.3: Semantic Memory（语义记忆）+ MemoryProfile + MemoryManager
 
 **Files:**
+
 - Create: `agentflow/runtime/memory/semantic.py`
 - Create: `agentflow/runtime/memory/manager.py`
 - Update: `agentflow/runtime/memory/__init__.py`
@@ -1071,6 +1077,7 @@ Expected: ALL PASS
 ### Task 3.1: Section + PromptTemplate
 
 **Files:**
+
 - Create: `agentflow/runtime/prompt/__init__.py`
 - Create: `agentflow/runtime/prompt/section.py`
 - Test: `tests/runtime/test_prompt.py`
@@ -1368,6 +1375,7 @@ class _StringSection(Section):
 ### Task 4.1: ThinkingStrategy 抽象 + ReActStrategy
 
 **Files:**
+
 - Create: `agentflow/runtime/thinking/__init__.py`
 - Create: `agentflow/runtime/thinking/base.py`
 - Create: `agentflow/runtime/thinking/react.py`
@@ -1621,6 +1629,7 @@ class ReActStrategy(ThinkingStrategy):
 ### Task 4.2: PlanExecuteStrategy + CoTStrategy
 
 **Files:**
+
 - Create: `agentflow/runtime/thinking/plan_execute.py`
 - Create: `agentflow/runtime/thinking/cot.py`
 - Test: `tests/runtime/test_thinking_plan_execute.py`, `tests/runtime/test_thinking_cot.py`
@@ -1813,6 +1822,7 @@ class CoTStrategy(ThinkingStrategy):
 ### Task 4.3: ReflectionWrapper + AdaptiveRouter + ThinkingEngine
 
 **Files:**
+
 - Create: `agentflow/runtime/thinking/reflection.py`
 - Create: `agentflow/runtime/thinking/adaptive.py`
 - Update: `agentflow/runtime/thinking/__init__.py`
@@ -2103,6 +2113,7 @@ class ThinkingEngine:
 ### Task 5.1: AgentBuilder
 
 **Files:**
+
 - Create: `agentflow/runtime/builder.py`
 - Modify: `agentflow/runtime/agent.py` — BaseAgent 简化为容器
 - Test: `tests/runtime/test_builder.py`

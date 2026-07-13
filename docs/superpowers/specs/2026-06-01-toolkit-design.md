@@ -14,12 +14,12 @@
 
 **自动推导规则**：
 
-| 字段 | 来源 |
-|------|------|
-| `name` | 函数名（可用 `@tool(name="...")` 覆盖） |
-| `description` | 函数 docstring 首行 |
-| `parameters` | 类型注解 → JSON Schema（Pydantic 负责转换） |
-| `return` | 返回值自动包装为 `ToolResult` |
+| 字段          | 来源                                        |
+| ------------- | ------------------------------------------- |
+| `name`        | 函数名（可用 `@tool(name="...")` 覆盖）     |
+| `description` | 函数 docstring 首行                         |
+| `parameters`  | 类型注解 → JSON Schema（Pydantic 负责转换） |
+| `return`      | 返回值自动包装为 `ToolResult`               |
 
 **三种用法**：
 
@@ -93,6 +93,7 @@ tool = RESTTool(method="POST", url="https://api.example.com/chat",
 ### 3.2 MCP 传输
 
 MCPTool 支持两种传输方式：
+
 - **stdio**：启动子进程，通过标准输入/输出通信
 - **HTTP**：向 MCP Server 发送 HTTP 请求
 
@@ -116,13 +117,13 @@ toolkit = ToolKit.from_module("my_project.tools")
 
 ## 四、与现有代码的关系
 
-| 现有模块 | 处理 |
-|----------|------|
-| `tool_registry.py` | 保留作为后端存储，ToolKit 委托给它 |
-| `Tool` dataclass | 保留，`@tool` 背后生成的就是 `Tool` 实例 |
-| `ToolResult` | 保留，不变 |
-| `ToolType` enum | 扩展：增加 `MCP`、`REST` |
-| MCP/REST 执行 | 新增 `mcp_client.py`、`rest_client.py` |
+| 现有模块           | 处理                                     |
+| ------------------ | ---------------------------------------- |
+| `tool_registry.py` | 保留作为后端存储，ToolKit 委托给它       |
+| `Tool` dataclass   | 保留，`@tool` 背后生成的就是 `Tool` 实例 |
+| `ToolResult`       | 保留，不变                               |
+| `ToolType` enum    | 扩展：增加 `MCP`、`REST`                 |
+| MCP/REST 执行      | 新增 `mcp_client.py`、`rest_client.py`   |
 
 ## 五、待定内容（不在本期实现）
 

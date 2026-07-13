@@ -145,11 +145,11 @@ class ReflectionWrapper(ThinkingStrategy):
 
 **三条自我检查**：
 
-| 检查项 | 问题 | 方法 |
-|--------|------|------|
-| 事实核查 | "工具结果和我声称的一致吗？" | 交叉比对 tool_calls 输出 vs agent 最终答案 |
-| 完备性 | "用户的问题我都回答了吗？" | 对比 user_input 关键点 vs 答案覆盖 |
-| 策略 | "当前方法对吗？要换模式吗？" | 检查工具调用是否循环重复、是否该升级为 Plan |
+| 检查项   | 问题                         | 方法                                        |
+| -------- | ---------------------------- | ------------------------------------------- |
+| 事实核查 | "工具结果和我声称的一致吗？" | 交叉比对 tool_calls 输出 vs agent 最终答案  |
+| 完备性   | "用户的问题我都回答了吗？"   | 对比 user_input 关键点 vs 答案覆盖          |
+| 策略     | "当前方法对吗？要换模式吗？" | 检查工具调用是否循环重复、是否该升级为 Plan |
 
 ## 四、自适应路由
 
@@ -225,6 +225,7 @@ agent = AgentBuilder("trader").with_thinking(
 ### 6.1 反思数据与评测联动
 
 反思过程中的 `reflection_notes` 全部记录在 Trace 中，作为：
+
 - **D7 Adaptability**：Agent 是否换了策略、是否自我修正成功
 - **D8 Consistency**：多次跑同一任务，反思是否能收敛到一致结果
 
@@ -238,11 +239,11 @@ ReflectionWrapper 在决定"换策略"时，不是从头开始——已执行的
 
 ## 七、与现有代码的关系
 
-| 现有模块 | 处理 |
-|----------|------|
-| `react_agent.py` (ReActAgent) | 逻辑迁移到 `ReActStrategy` |
-| `agent.py` (BaseAgent.run) | 简化为委托 `ThinkingEngine.run()` |
-| `BaseAgent` | 保留，作为 Builder 的输出类型 |
+| 现有模块                      | 处理                              |
+| ----------------------------- | --------------------------------- |
+| `react_agent.py` (ReActAgent) | 逻辑迁移到 `ReActStrategy`        |
+| `agent.py` (BaseAgent.run)    | 简化为委托 `ThinkingEngine.run()` |
+| `BaseAgent`                   | 保留，作为 Builder 的输出类型     |
 
 ## 八、待定内容
 

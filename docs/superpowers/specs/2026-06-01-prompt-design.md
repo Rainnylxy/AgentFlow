@@ -46,19 +46,19 @@ class PromptTemplate:
 
 ### 3.1 通用模块（builtin/）
 
-| 模块 | 说明 | 关键参数 |
-|------|------|----------|
-| `role_card` | 角色定义 | `name`, `role`, `tone`, `audience` |
-| `tool_manual` | 工具使用说明 | 自动从 ToolKit 注入工具列表 |
-| `safety_rules` | 安全约束 | `rules: list[str]` |
-| `format_guide` | 输出格式要求 | `format: "markdown" \| "json" \| "plain"` |
-| `time_context` | 当前时间上下文 | 自动注入当前日期时间 |
+| 模块           | 说明           | 关键参数                                  |
+| -------------- | -------------- | ----------------------------------------- |
+| `role_card`    | 角色定义       | `name`, `role`, `tone`, `audience`        |
+| `tool_manual`  | 工具使用说明   | 自动从 ToolKit 注入工具列表               |
+| `safety_rules` | 安全约束       | `rules: list[str]`                        |
+| `format_guide` | 输出格式要求   | `format: "markdown" \| "json" \| "plain"` |
+| `time_context` | 当前时间上下文 | 自动注入当前日期时间                      |
 
 ### 3.2 领域模块（domains/）
 
-| 模块 | 说明 |
-|------|------|
-| `customer_support` | 客服场景套装（角色 + 响应规范 + 升级规则） |
+| 模块               | 说明                                           |
+| ------------------ | ---------------------------------------------- |
+| `customer_support` | 客服场景套装（角色 + 响应规范 + 升级规则）     |
 | `coding_assistant` | 编程助手套装（代码规范 + 安全约束 + 测试要求） |
 | `research_analyst` | 研究分析套装（引证要求 + 批判思维 + 来源标注） |
 
@@ -154,6 +154,7 @@ order=60: time_context   (时间上下文最后)
 ### 6.2 自动上下文注入
 
 `PromptTemplate.render()` 时自动注入：
+
 - `tools`：从当前 Agent 的 ToolKit 读取
 - `current_time`：当前日期时间
 - `agent_name`：从 AgentBuilder 传入
@@ -166,10 +167,10 @@ Section 的渲染结果可缓存。当 `render()` 的 context 参数不变时，
 
 ## 七、与现有代码的关系
 
-| 现有模块 | 处理 |
-|----------|------|
-| `system_prompt: str` 参数 | 保留，内部自动包装为 `PromptTemplate.from_string()` |
-| ReActAgent 中的 prompt 拼接 | 移除，统一由 PromptTemplate 管理 |
+| 现有模块                    | 处理                                                |
+| --------------------------- | --------------------------------------------------- |
+| `system_prompt: str` 参数   | 保留，内部自动包装为 `PromptTemplate.from_string()` |
+| ReActAgent 中的 prompt 拼接 | 移除，统一由 PromptTemplate 管理                    |
 
 ## 八、待定内容
 

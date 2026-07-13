@@ -9,6 +9,7 @@
 **Tech Stack:** Python 3.10+, openai SDK (DeepSeek API), Pillow, dataclasses, asyncio
 
 **MVP 范围:**
+
 - ✅ 6 阶段 Pipeline 全部实现
 - ✅ StyleProfile 三种风格 + 自动判断
 - ✅ 角色定妆 + sd_trigger_words
@@ -54,6 +55,7 @@ novel2comic_v2/
 ### Task 1: 项目骨架搭建
 
 **Files:**
+
 - Create: `novel2comic_v2/requirements.txt`
 - Create: `novel2comic_v2/.env.example`
 - Create: `novel2comic_v2/src/__init__.py`
@@ -87,7 +89,7 @@ N2C_IMG_BASE_URL=https://api.stability.ai/v1
 N2C_PROXY=
 ```
 
-- [ ] **Step 4: 创建空 __init__.py 和 .gitkeep**
+- [ ] **Step 4: 创建空 **init**.py 和 .gitkeep**
 
 ```bash
 touch novel2comic_v2/src/__init__.py
@@ -108,6 +110,7 @@ git commit -m "chore: scaffold novel2comic_v2 MVP project structure"
 ### Task 2: 数据模型 (models.py)
 
 **Files:**
+
 - Create: `novel2comic_v2/src/models.py`
 
 - [ ] **Step 1: 编写完整数据模型**
@@ -354,6 +357,7 @@ git commit -m "feat(n2c): add data models with JSON serialization"
 ### Task 3: StyleProfile 系统
 
 **Files:**
+
 - Create: `novel2comic_v2/src/styles.py`
 
 - [ ] **Step 1: 编写三种内置风格定义 + 自动判断**
@@ -502,11 +506,12 @@ git commit -m "feat(n2c): add StyleProfile system with auto-detection"
 ### Task 4: LLM Adapter
 
 **Files:**
+
 - Create: `novel2comic_v2/src/llm_adapter.py`
 
 - [ ] **Step 1: 编写 LLM 调用封装**
 
-```python
+````python
 # -*- coding: utf-8 -*-
 """LLM Adapter——封装 LLM 调用，让 Pipeline 各阶段只需关心 prompt 和输出格式。"""
 
@@ -517,7 +522,7 @@ from openai import OpenAI
 
 class LLMAdapter:
     """LLM 调用适配器。
-    
+
     封装了 API 调用细节（base_url、proxy、model），
     Pipeline 各阶段只需传入 prompt 即可获得结构化输出。
     """
@@ -580,7 +585,7 @@ class LLMAdapter:
             text = "\n".join(lines)
 
         return json.loads(text)
-```
+````
 
 - [ ] **Step 2: 验证导入**
 
@@ -602,6 +607,7 @@ git commit -m "feat(n2c): add LLM adapter with JSON mode"
 ### Task 5: ImageGen Adapter
 
 **Files:**
+
 - Create: `novel2comic_v2/src/img_adapter.py`
 
 - [ ] **Step 1: 编写生图适配器（含占位图兜底）**
@@ -618,7 +624,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 class ImageGenAdapter:
     """生图适配器。
-    
+
     MVP 策略:
     - 有 API key → 调云端生图（Stability AI / 兼容 OpenAI image API）
     - 无 API key → 生成占位图（有色块 + 文字标注）
@@ -784,6 +790,7 @@ git commit -m "feat(n2c): add ImageGen adapter with placeholder fallback"
 ### Task 6: Pipeline 引擎
 
 **Files:**
+
 - Create: `novel2comic_v2/src/pipeline/engine.py`
 
 - [ ] **Step 1: 编写 Pipeline 编排器**
@@ -877,6 +884,7 @@ git commit -m "feat(n2c): add Pipeline engine orchestrator"
 ### Task 7: Stage ① 文本分析
 
 **Files:**
+
 - Create: `novel2comic_v2/src/pipeline/stage1_analyze.py`
 
 - [ ] **Step 1: 编写文本分析阶段**
@@ -979,6 +987,7 @@ git commit -m "feat(n2c): add Stage 1 - text analysis"
 ### Task 8: Stage ② 角色设计
 
 **Files:**
+
 - Create: `novel2comic_v2/src/pipeline/stage2_characters.py`
 
 - [ ] **Step 1: 编写角色设计阶段**
@@ -1091,6 +1100,7 @@ git commit -m "feat(n2c): add Stage 2 - character design"
 ### Task 9: Stage ③ 场景拆分
 
 **Files:**
+
 - Create: `novel2comic_v2/src/pipeline/stage3_scenes.py`
 
 - [ ] **Step 1: 编写场景拆分阶段**
@@ -1179,6 +1189,7 @@ git commit -m "feat(n2c): add Stage 3 - scene extraction"
 ### Task 10: Stage ④ 分镜生成
 
 **Files:**
+
 - Create: `novel2comic_v2/src/pipeline/stage4_storyboard.py`
 
 - [ ] **Step 1: 编写分镜生成阶段**
@@ -1333,6 +1344,7 @@ git commit -m "feat(n2c): add Stage 4 - storyboard generation with auto prompt e
 ### Task 11: Stage ⑤ 图像生成
 
 **Files:**
+
 - Create: `novel2comic_v2/src/pipeline/stage5_image_gen.py`
 
 - [ ] **Step 1: 编写图像生成阶段**
@@ -1419,6 +1431,7 @@ git commit -m "feat(n2c): add Stage 5 - image generation"
 ### Task 12: Stage ⑥ 漫画排版
 
 **Files:**
+
 - Create: `novel2comic_v2/src/pipeline/stage6_layout.py`
 
 - [ ] **Step 1: 编写排版渲染阶段**
@@ -1634,6 +1647,7 @@ git commit -m "feat(n2c): add Stage 6 - comic layout with speech bubbles for scr
 ### Task 13: CLI 入口
 
 **Files:**
+
 - Create: `novel2comic_v2/src/cli.py`
 
 - [ ] **Step 1: 编写 CLI 交互入口**
@@ -1862,6 +1876,7 @@ git commit -m "feat(n2c): add CLI entry point with interactive stage-by-stage ex
 ### Task 14: Skill 定义文件
 
 **Files:**
+
 - Create: `novel2comic_v2/skills/novel2comic.md`
 
 - [ ] **Step 1: 编写 Skill 定义**
@@ -1873,15 +1888,19 @@ description: 将小说文本转化为漫画分镜脚本 + 图片生成 prompt
 ---
 
 ## Role
+
 你是专业的漫画分镜师 (Comic Storyboard Artist)，精通日式漫画、韩式条漫、中式古风漫画的分镜设计。
 
 ## 工作流程
+
 **第一步：分析 + 规划**
+
 1. 分析文本：类型、风格判断 (manga/webtoon/gufeng)、人物列表、情感基调
 2. 拆分场景：找出关键叙事场景（3-8 个），每个场景概括为 1-2 句话
 
 **第二步：执行生成**
 按场景逐一生成完整的分镜 Markdown，每格包含：
+
 - 画面描述（中文，含前景/中景/背景构图）
 - 角色动作和表情
 - 台词（无则留空）
@@ -1895,18 +1914,22 @@ description: 将小说文本转化为漫画分镜脚本 + 图片生成 prompt
 ## 三种风格规范
 
 ### 日式 Manga
+
 - 黑白为主，灰度网点点缀
 - sd_prompt: `manga style, black and white, screentone, speed lines, line art`
 
 ### 韩式 Webtoon
+
 - 全彩色，柔和调色板，竖屏滑动
 - sd_prompt: `webtoon style, full color, soft palette, manhwa, vertical scroll`
 
 ### 中式古风
+
 - 水墨风/工笔重彩，低饱和雅致色调
 - sd_prompt: `chinese ink painting style, gufeng, watercolor wash, ancient chinese comic`
 
 ## 质量规范
+
 1. 每场景 3-6 格分镜
 2. 画面描述必须有构图信息
 3. SD prompt 包含画风关键词 + 画幅比例
@@ -1927,6 +1950,7 @@ git commit -m "feat(n2c): add Skill definition file for novel2comic"
 ### Task 15: 端到端集成测试
 
 **Files:**
+
 - Create: `novel2comic_v2/tests/test_pipeline.py`
 
 - [ ] **Step 1: 创建 tests 目录和测试文件**
@@ -2195,11 +2219,13 @@ git commit -m "test(n2c): add end-to-end pipeline integration tests with mock LL
 ### Task 16: 项目 .gitignore 更新
 
 **Files:**
+
 - Modify: `.gitignore` (project root)
 
 - [ ] **Step 1: 确保 novel2comic_v2 输出目录不被追踪**
 
 确认 `.gitignore` 包含以下行：
+
 ```
 novel2comic_v2/projects/
 novel2comic_v2/.env
@@ -2240,7 +2266,7 @@ git commit -m "chore: update .gitignore for novel2comic_v2 outputs"
 
 2. **Placeholder scan**: 无 TBD/TODO。所有代码步骤完整。
 
-3. **Type consistency**: 
+3. **Type consistency**:
    - `ChapterData` 在 models.py 定义，所有 stage 函数使用 → 一致
    - `LLMAdapter.chat_json()` 返回 `dict`，所有 stage 使用 `.get()` → 一致
    - `ImageGenAdapter.generate()` 返回 `str` (文件路径) → 一致

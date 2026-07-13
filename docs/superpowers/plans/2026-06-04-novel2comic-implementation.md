@@ -13,6 +13,7 @@
 ### Task 1: 创建 novel2comic 项目
 
 **Files:**
+
 - Create: `novel2comic/agent.py`
 - Create: `novel2comic/requirements.txt`
 - Create: `novel2comic/.env.example`
@@ -25,6 +26,7 @@ mkdir -p /d/Codes_lxy/VibeCoding/AgentFlow/novel2comic/outputs
 ```
 
 Create `novel2comic/requirements.txt`:
+
 ```
 openai>=1.0.0
 httpx>=0.27.0
@@ -49,7 +51,7 @@ AGENTFLOW_PROXY=http://127.0.0.1:3067
 
 这是核心文件，包含 4 个 Tool + Prompt 模板 + AgentBuilder。
 
-```python
+````python
 # -*- coding: utf-8 -*-
 """
 Novel2Comic Agent
@@ -396,7 +398,7 @@ if __name__ == "__main__":
             chapter_title = os.path.splitext(os.path.basename(sys.argv[1]))[0]
 
     asyncio.run(run_novel2comic(input_text, chapter_title))
-```
+````
 
 - [ ] **Step 4: 创建 example.py**
 
