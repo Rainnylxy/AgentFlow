@@ -54,6 +54,11 @@ class AgentTrace:
     incoming_messages: list[dict] = field(default_factory=list)  # 收到的消息摘要
     memory_scope: str = "inherit"
 
+    # Memory 操作记录
+    memory_retrieved: list[dict] = field(default_factory=list)   # pre_turn 检索到的记忆
+    memory_stored: list[dict] = field(default_factory=list)      # post_turn 提取并存储的事实
+    memory_forgotten: int = 0                                     # post_turn 遗忘的过期事实数
+
     # 汇总
     total_turns: int = 0
     total_tool_calls: int = 0
@@ -183,6 +188,9 @@ class WorkflowTrace:
                     "error": at.error,
                     "memory_scope": at.memory_scope,
                     "upstream_visible": at.upstream_visible,
+                    "memory_retrieved": at.memory_retrieved,
+                    "memory_stored": at.memory_stored,
+                    "memory_forgotten": at.memory_forgotten,
                     "turns": [
                         {
                             "turn": t.turn,

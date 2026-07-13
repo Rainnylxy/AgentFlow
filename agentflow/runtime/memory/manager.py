@@ -87,6 +87,8 @@ class MemoryManager:
         self.episodic = EpisodicMemory(max_facts=self.profile.episodic_max)
         self.semantic = SemanticMemory(embedder=self.profile.semantic_embedder)
         self._turn_count = 0
+        self._last_extracted: list[MemoryFact] = []
+        self._last_forgotten: int = 0
 
         # 事实提取策略：light profile 默认不提取，其余默认关键词
         if fact_extractor is not None:
@@ -136,7 +138,7 @@ class MemoryManager:
             await self._extract_facts()
 
         if self.profile.auto_forget:
-            self.episodic.forget_expired()
+            self._last_forgotten = self.episodic.forget_expired()
 
     async def _extract_facts(self) -> None:
         """从工作记忆中提取结构化事实，委托给注入的 FactExtractor 策略。
@@ -146,5 +148,6 @@ class MemoryManager:
         """
         messages = self.working.get_context_window()
         facts = await self._fact_extractor.extract(messages, self._turn_count)
+        self._last_extracted = list(facts)
         for fact in facts:
             self.episodic.add(fact)

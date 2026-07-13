@@ -296,6 +296,14 @@ class _BuiltAgent(BaseAgent):
         # 检索门：从语义记忆拉取相关事实
         retrieved = self.memory.pre_turn(user_input)
 
+        # 记录到 trace
+        if agent_trace:
+            agent_trace.memory_retrieved = [
+                {"subject": f.subject, "predicate": f.predicate,
+                 "object": f.object, "confidence": f.confidence}
+                for f in retrieved
+            ]
+
         # 记忆事实注入工作记忆
         for fact in retrieved:
             from agentflow.runtime.memory.working import Message
@@ -340,6 +348,16 @@ class _BuiltAgent(BaseAgent):
 
         # 记忆门 + 遗忘门
         await self.memory.post_turn()
+
+        # 记录到 trace
+        if agent_trace:
+            agent_trace.memory_stored = [
+                {"subject": f.subject, "predicate": f.predicate,
+                 "object": f.object, "fact_type": f.fact_type,
+                 "confidence": f.confidence}
+                for f in self.memory._last_extracted
+            ]
+            agent_trace.memory_forgotten = self.memory._last_forgotten
 
         return AgentResult(
             output=think_result.output,

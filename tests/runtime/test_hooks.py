@@ -306,6 +306,10 @@ class TestAgentTraceRecording:
 
         # 验证 AgentTrace 汇总 token 正确聚合
         assert at.total_tokens.get("total_tokens", 0) > 0
+        # 验证 Memory 操作记录
+        assert isinstance(at.memory_retrieved, list)
+        assert isinstance(at.memory_stored, list)
+        assert at.memory_forgotten == 0
 
     async def test_trace_records_skill_activation(self):
         """Trace 记录 Skill 激活事件。"""
