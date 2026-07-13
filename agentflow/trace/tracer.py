@@ -36,7 +36,8 @@ class AgentTurn:
     thinking: str = ""                    # 思考内容
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
     final_answer: str = ""                # 如果这轮给出了最终答案
-    tokens: dict = field(default_factory=dict)  # {input, output}
+    finish_reason: str = ""               # LLM 结束原因: stop, length, tool_calls, content_filter
+    tokens: dict = field(default_factory=dict)  # {prompt_tokens, completion_tokens, total_tokens}
     duration_ms: int = 0
     messages_snapshot: list[dict] = field(default_factory=list)  # 本轮 LLM 调用前的完整 messages
 
@@ -190,6 +191,7 @@ class WorkflowTrace:
                                  "output": tc.output[:100], "duration_ms": tc.duration_ms}
                                 for tc in t.tool_calls
                             ],
+                            "finish_reason": t.finish_reason,
                             "tokens": t.tokens,
                             "duration_ms": t.duration_ms,
                             "messages_snapshot": t.messages_snapshot,

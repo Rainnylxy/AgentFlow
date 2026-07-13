@@ -138,9 +138,11 @@ class ThinkingStrategy(ABC):
             response = await context.llm_client.chat(messages, tools=tools_param)
 
             if response.tool_calls:
-                # 回填本轮思考内容
+                # 回填本轮思考内容和 LLM 响应元信息
                 if trace:
                     trace.turns[-1].thinking = response.content or f"Decided to call: {[tc['function']['name'] for tc in response.tool_calls]}"
+                    trace.turns[-1].finish_reason = response.finish_reason
+                    trace.turns[-1].tokens = dict(response.usage) if response.usage else {}
                 # 流式：发送思考事件
                 await context.emit(StreamEvent(
                     type="thinking",
@@ -216,13 +218,19 @@ class ThinkingStrategy(ABC):
             else:
                 # 无 tool_calls → 最终响应
                 messages.append({"role": "assistant", "content": response.content})
-                # 回填最终回答到当前 turn
+                # 回填最终回答 + LLM 响应元信息到当前 turn
                 if trace:
                     trace.turns[-1].final_answer = response.content
+                    trace.turns[-1].finish_reason = response.finish_reason
+                    trace.turns[-1].tokens = dict(response.usage) if response.usage else {}
                 # 填写汇总
                 if trace:
-                    if hasattr(response, 'usage') and response.usage:
-                        trace.total_tokens = response.usage.get("total_tokens", 0)
+                    # 聚合所有 turn 的 token
+                    agg = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                    for t in trace.turns:
+                        for k in agg:
+                            agg[k] += t.tokens.get(k, 0)
+                    trace.total_tokens = agg
                     trace.success = True
                 # 流式：发送最终答案事件
                 await context.emit(StreamEvent(

@@ -31,7 +31,8 @@ class LLMResponse:
     content: str
     role: str = "assistant"
     tool_calls: list = field(default_factory=list)
-    usage: dict = field(default_factory=dict)
+    finish_reason: str = ""  # stop, length, tool_calls, content_filter
+    usage: dict = field(default_factory=dict)  # {prompt_tokens, completion_tokens, total_tokens}
 
 
 class LLMClient(ABC):
@@ -200,7 +201,10 @@ class OpenAIClient(LLMClient):
             content=msg.content or "",
             role=msg.role,
             tool_calls=tool_calls,
+            finish_reason=getattr(choice, 'finish_reason', '') or '',
             usage={
+                "prompt_tokens": completion.usage.prompt_tokens,
+                "completion_tokens": completion.usage.completion_tokens,
                 "total_tokens": completion.usage.total_tokens,
             } if completion.usage else {},
         )

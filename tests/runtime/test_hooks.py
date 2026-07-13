@@ -245,11 +245,16 @@ class TestAgentTraceRecording:
 
         mock_llm = AsyncMock()
         mock_llm.chat.side_effect = [
-            MagicMock(content="Need to search.", role="assistant", tool_calls=[{
+            MagicMock(content="Need to search.", role="assistant",
+                      finish_reason="tool_calls",
+                      usage={"prompt_tokens": 50, "completion_tokens": 20, "total_tokens": 70},
+                      tool_calls=[{
                 "id": "c1", "type": "function",
                 "function": {"name": "search", "arguments": '{"q": "refund"}'},
             }]),
-            MagicMock(content="The answer is 30 days.", role="assistant", tool_calls=[]),
+            MagicMock(content="The answer is 30 days.", role="assistant", tool_calls=[],
+                      finish_reason="stop",
+                      usage={"prompt_tokens": 80, "completion_tokens": 15, "total_tokens": 95}),
         ]
 
         @tool
@@ -284,13 +289,20 @@ class TestAgentTraceRecording:
         assert turn0.tool_calls[0].tool == "search"
         assert turn0.tool_calls[0].input == {"q": "refund"}
         assert "Found" in turn0.tool_calls[0].output
+        assert turn0.finish_reason == "tool_calls" or turn0.finish_reason == "stop"
+        assert turn0.tokens.get("total_tokens", 0) > 0
         # messages_snapshot 记录了 LLM 调用前的完整上下文
         assert len(turn0.messages_snapshot) >= 2  # system + user
 
         # 验证 turn 1: final answer
         turn1 = at.turns[1]
         assert "30 days" in turn1.final_answer
+        assert turn1.finish_reason == "stop"
+        assert turn1.tokens.get("total_tokens", 0) > 0
         assert len(turn1.messages_snapshot) >= 4  # system + user + assistant(tool_call) + tool_result
+
+        # 验证 AgentTrace 汇总 token 正确聚合
+        assert at.total_tokens.get("total_tokens", 0) > 0
 
     async def test_trace_records_skill_activation(self):
         """Trace 记录 Skill 激活事件。"""
@@ -303,12 +315,17 @@ class TestAgentTraceRecording:
         mock_llm = AsyncMock()
         mock_llm.chat.side_effect = [
             # 第1轮：激活 skill
-            MagicMock(content=None, role="assistant", tool_calls=[{
+            MagicMock(content=None, role="assistant",
+                      finish_reason="tool_calls",
+                      usage={"prompt_tokens": 30, "completion_tokens": 10, "total_tokens": 40},
+                      tool_calls=[{
                 "id": "c1", "type": "function",
                 "function": {"name": "use_skill_helper", "arguments": "{}"},
             }]),
             # 第2轮：最终回答
-            MagicMock(content="Done with skill.", role="assistant", tool_calls=[]),
+            MagicMock(content="Done with skill.", role="assistant", tool_calls=[],
+                      finish_reason="stop",
+                      usage={"prompt_tokens": 60, "completion_tokens": 12, "total_tokens": 72}),
         ]
 
         skill = Skill(
@@ -357,6 +374,8 @@ class TestAgentTraceRecording:
         mock_llm = AsyncMock()
         mock_llm.chat.return_value = MagicMock(
             content="Hello! How can I help?", role="assistant", tool_calls=[],
+            finish_reason="stop",
+            usage={"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28},
         )
 
         agent = await (
