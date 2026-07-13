@@ -38,6 +38,7 @@ class AgentTurn:
     final_answer: str = ""                # 如果这轮给出了最终答案
     tokens: dict = field(default_factory=dict)  # {input, output}
     duration_ms: int = 0
+    messages_snapshot: list[dict] = field(default_factory=list)  # 本轮 LLM 调用前的完整 messages
 
 
 @dataclass
@@ -191,6 +192,7 @@ class WorkflowTrace:
                             ],
                             "tokens": t.tokens,
                             "duration_ms": t.duration_ms,
+                            "messages_snapshot": t.messages_snapshot,
                         }
                         for t in at.turns
                     ],

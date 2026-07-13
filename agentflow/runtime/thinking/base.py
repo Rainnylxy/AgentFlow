@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import time
 from abc import ABC, abstractmethod
@@ -125,17 +126,21 @@ class ThinkingStrategy(ABC):
         for i in range(context.max_iterations):
             t_turn_start = time.monotonic()
 
+            # 每轮开始：创建 turn 并捕获完整 messages 快照（LLM 调用前的上下文）
+            if trace:
+                turn = AgentTurn(
+                    turn=i + 1,
+                    messages_snapshot=copy.deepcopy(messages),
+                )
+                trace.turns.append(turn)
+                trace.total_turns = len(trace.turns)
+
             response = await context.llm_client.chat(messages, tools=tools_param)
 
             if response.tool_calls:
-                # 记录一轮 trace
+                # 回填本轮思考内容
                 if trace:
-                    turn = AgentTurn(
-                        turn=i + 1,
-                        thinking=response.content or f"Decided to call: {[tc['function']['name'] for tc in response.tool_calls]}",
-                    )
-                    trace.turns.append(turn)
-                    trace.total_turns = len(trace.turns)
+                    trace.turns[-1].thinking = response.content or f"Decided to call: {[tc['function']['name'] for tc in response.tool_calls]}"
                 # 流式：发送思考事件
                 await context.emit(StreamEvent(
                     type="thinking",
@@ -211,16 +216,9 @@ class ThinkingStrategy(ABC):
             else:
                 # 无 tool_calls → 最终响应
                 messages.append({"role": "assistant", "content": response.content})
-                # 记录最终回答 trace
-                if trace and trace.turns:
+                # 回填最终回答到当前 turn
+                if trace:
                     trace.turns[-1].final_answer = response.content
-                elif trace:
-                    # 没有工具调用的情况下直接回答
-                    trace.turns.append(AgentTurn(
-                        turn=1,
-                        final_answer=response.content,
-                    ))
-                    trace.total_turns = 1
                 # 填写汇总
                 if trace:
                     if hasattr(response, 'usage') and response.usage:

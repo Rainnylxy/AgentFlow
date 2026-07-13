@@ -274,17 +274,23 @@ class TestAgentTraceRecording:
         assert result.agent_trace is not None
         at = result.agent_trace
         assert at.success
-        assert at.total_turns == 1
+        assert at.total_turns == 2  # 每轮 LLM 调用一个 turn：tool_call + final_answer
         assert at.total_tool_calls == 1
 
-        # 验证 turn 内容
-        turn = at.turns[0]
-        assert "search" in turn.thinking.lower() or "Need" in turn.thinking
-        assert len(turn.tool_calls) == 1
-        assert turn.tool_calls[0].tool == "search"
-        assert turn.tool_calls[0].input == {"q": "refund"}
-        assert "Found" in turn.tool_calls[0].output
-        assert "30 days" in turn.final_answer
+        # 验证 turn 0: tool call
+        turn0 = at.turns[0]
+        assert "search" in turn0.thinking.lower() or "Need" in turn0.thinking
+        assert len(turn0.tool_calls) == 1
+        assert turn0.tool_calls[0].tool == "search"
+        assert turn0.tool_calls[0].input == {"q": "refund"}
+        assert "Found" in turn0.tool_calls[0].output
+        # messages_snapshot 记录了 LLM 调用前的完整上下文
+        assert len(turn0.messages_snapshot) >= 2  # system + user
+
+        # 验证 turn 1: final answer
+        turn1 = at.turns[1]
+        assert "30 days" in turn1.final_answer
+        assert len(turn1.messages_snapshot) >= 4  # system + user + assistant(tool_call) + tool_result
 
     async def test_trace_records_skill_activation(self):
         """Trace 记录 Skill 激活事件。"""
@@ -331,12 +337,15 @@ class TestAgentTraceRecording:
 
         at = result.agent_trace
         assert at is not None
-        # 应该有 2 轮：激活 + 回答
-        assert at.total_turns == 1
+        # 每轮 LLM 调用一个 turn：激活 + 回答 = 2 轮
+        assert at.total_turns == 2
         assert at.total_tool_calls == 1
         # 工具调用记录应该标记为 skill 激活
         tc = at.turns[0].tool_calls[0]
         assert "helper" in tc.tool
+        # messages_snapshot 记录了每轮 LLM 调用前的完整上下文
+        assert len(at.turns[0].messages_snapshot) >= 2  # system + user
+        assert len(at.turns[1].messages_snapshot) >= 4  # system + skill + user + assistant + tool_result
 
     async def test_trace_no_tools(self):
         """无工具调用的简单问答也有 trace。"""
