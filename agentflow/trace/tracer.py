@@ -67,6 +67,40 @@ class AgentTrace:
     success: bool = True
     error: str = ""
 
+    def to_dict(self) -> dict:
+        """导出为可序列化的 dict（单 Agent 场景直接调用）。"""
+        return {
+            "agent_id": self.agent_id,
+            "total_turns": self.total_turns,
+            "total_tool_calls": self.total_tool_calls,
+            "total_tokens": self.total_tokens,
+            "total_duration_ms": self.total_duration_ms,
+            "success": self.success,
+            "error": self.error,
+            "memory_scope": self.memory_scope,
+            "upstream_visible": self.upstream_visible,
+            "memory_retrieved": self.memory_retrieved,
+            "memory_stored": self.memory_stored,
+            "memory_forgotten": self.memory_forgotten,
+            "turns": [
+                {
+                    "turn": t.turn,
+                    "thinking": t.thinking[:200],
+                    "tool_calls": [
+                        {"tool": tc.tool, "input": tc.input,
+                         "output": tc.output[:100], "duration_ms": tc.duration_ms}
+                        for tc in t.tool_calls
+                    ],
+                    "finish_reason": t.finish_reason,
+                    "tokens": t.tokens,
+                    "duration_ms": t.duration_ms,
+                    "messages_snapshot": t.messages_snapshot,
+                    "tools_snapshot": t.tools_snapshot,
+                }
+                for t in self.turns
+            ],
+        }
+
 
 # ---------------------------------------------------------------------------
 # 消息流记录
@@ -178,37 +212,7 @@ class WorkflowTrace:
             "end_time": self.end_time,
             "dag_groups": self.dag_groups,
             "node_traces": {
-                nid: {
-                    "agent_id": at.agent_id,
-                    "total_turns": at.total_turns,
-                    "total_tool_calls": at.total_tool_calls,
-                    "total_tokens": at.total_tokens,
-                    "total_duration_ms": at.total_duration_ms,
-                    "success": at.success,
-                    "error": at.error,
-                    "memory_scope": at.memory_scope,
-                    "upstream_visible": at.upstream_visible,
-                    "memory_retrieved": at.memory_retrieved,
-                    "memory_stored": at.memory_stored,
-                    "memory_forgotten": at.memory_forgotten,
-                    "turns": [
-                        {
-                            "turn": t.turn,
-                            "thinking": t.thinking[:200],
-                            "tool_calls": [
-                                {"tool": tc.tool, "input": tc.input,
-                                 "output": tc.output[:100], "duration_ms": tc.duration_ms}
-                                for tc in t.tool_calls
-                            ],
-                            "finish_reason": t.finish_reason,
-                            "tokens": t.tokens,
-                            "duration_ms": t.duration_ms,
-                            "messages_snapshot": t.messages_snapshot,
-                            "tools_snapshot": t.tools_snapshot,
-                        }
-                        for t in at.turns
-                    ],
-                }
+                nid: at.to_dict()
                 for nid, at in self.node_traces.items()
             },
             "message_flow": [
