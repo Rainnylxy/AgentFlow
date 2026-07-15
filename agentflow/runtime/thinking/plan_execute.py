@@ -1,4 +1,8 @@
-"""Plan-Execute 模式：先制定计划，再逐步执行，每步独立 query，支持工具调用。"""
+"""Plan-Execute 模式：先制定计划，再逐步执行，每步独立 query，支持工具调用。
+
+KV Cache 优化：跨步骤的不变内容（system_prompt + task + plan）放在消息前缀，
+仅每步的 prev_results 和 step 指令放在 user 消息尾部，最大化前缀缓存命中。
+"""
 
 import re
 
@@ -36,8 +40,10 @@ class PlanExecuteStrategy(ThinkingStrategy):
         all_tool_calls.extend(plan_tool_calls)
 
         # Phase 2: Execute — each step as an independent query
+        # 将 task + plan 冻结为 system 消息，放在前缀区以命中 KV Cache
         plan_steps = self._parse_steps(plan_text)
         step_results = []
+
         for i, step_desc in enumerate(plan_steps):
             prev_context = ""
             if step_results:
@@ -45,12 +51,18 @@ class PlanExecuteStrategy(ThinkingStrategy):
                     f"Step {j+1}: {r}" for j, r in enumerate(step_results)
                 ) + "\n\n"
 
-            step_messages = [{"role": "system", "content": context.system_prompt}]
+            # 前缀区：system_prompt → frozen(task+plan) → references → 全部命中缓存
+            step_messages = [
+                {"role": "system", "content": context.system_prompt},
+                {"role": "system", "content": (
+                    f"Overall task: {context.user_input}\n\n"
+                    f"Full plan:\n{plan_text}"
+                )},
+            ]
             for ref_msg in context.reference_messages:
                 step_messages.append(dict(ref_msg))
+            # 变量区：仅此一条随步骤变化
             step_messages.append({"role": "user", "content": (
-                f"Overall task: {context.user_input}\n\n"
-                f"Full plan:\n{plan_text}\n\n"
                 f"{prev_context}"
                 f"Now execute Step {i+1}/{len(plan_steps)}: {step_desc}\n\n"
                 "Execute this specific step. Call tools if needed. "
@@ -66,15 +78,17 @@ class PlanExecuteStrategy(ThinkingStrategy):
             })
             all_tool_calls.extend(step_tool_calls)
 
-        # Phase 3: Finalize
+        # Phase 3: Finalize — 同样将 task 冻结到前缀区
         execute_summary = "\n".join(
             f"Step {j+1}: {r}" for j, r in enumerate(step_results)
         )
-        finalize_messages = [{"role": "system", "content": context.system_prompt}]
+        finalize_messages = [
+            {"role": "system", "content": context.system_prompt},
+            {"role": "system", "content": f"Task: {context.user_input}"},
+        ]
         for ref_msg in context.reference_messages:
             finalize_messages.append(dict(ref_msg))
         finalize_messages.append({"role": "user", "content": (
-            f"Task: {context.user_input}\n\n"
             f"Execution results:\n{execute_summary}\n\n"
             "Synthesize the final result from the step results above."
         )})

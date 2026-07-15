@@ -1,4 +1,8 @@
-"""ReAct 模式：Thought → Action → Observation 循环。"""
+"""ReAct 模式：Thought → Action → Observation 循环。
+
+KV Cache 优化：system（ReAct 引导 + 用户 prompt）+ references 构成稳定前缀，
+工作记忆中的已有消息追加在尾部。tool_loop 内消息增长方向与缓存方向一致。
+"""
 
 from agentflow.runtime.thinking.base import ThinkingStrategy, ThinkContext, ThinkResult
 
@@ -30,18 +34,21 @@ class ReActStrategy(ThinkingStrategy):
     2. Action: 执行工具调用
     3. Observation: 将工具结果反馈给 LLM
     4. 重复直到 LLM 给出最终答案，或达到 max_iterations
+
+    KV Cache：ReAct 引导 + system_prompt + references 构成前缀缓存区，
+    tool_loop 内的消息追加方向自然形成缓存命中。
     """
 
     async def run(self, context: ThinkContext) -> ThinkResult:
-        # 注入 ReAct 思考引导 + 用户自定义 prompt
+        # 前缀区：ReAct 引导 + 用户 system_prompt → references → 全部命中缓存
         system_content = REACT_SYSTEM_PROMPT + "\n\n" + context.system_prompt
         messages = [{"role": "system", "content": system_content}]
 
-        # 注入 Reference 参考卡（pinned，永不裁剪）
+        # Reference 参考卡（pinned，永不裁剪，构成缓存前缀）
         for ref_msg in context.reference_messages:
             messages.append(dict(ref_msg))
 
-        # 注入已有消息历史
+        # 变量区：工作记忆中的已有消息历史（追加在缓存前缀之后）
         for msg in context.messages:
             msg_dict = {"role": msg.role, "content": msg.content}
             if hasattr(msg, 'tool_call_id') and msg.tool_call_id:

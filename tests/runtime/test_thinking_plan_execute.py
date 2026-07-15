@@ -65,13 +65,17 @@ class TestPlanExecuteStrategy:
         assert "finalize" in phases
 
     def test_each_step_independent_query(self):
-        """每个步骤有独立的上下文窗口，上一步结果传给下一步。"""
+        """每个步骤的 KV Cache 结构：task 在 system 区，step 指令在 user 区。"""
         mock_llm = AsyncMock()
-        steps_seen = []
+        system_contents = []
+        user_contents = []
 
         async def side_effect(messages, tools=None, **kwargs):
-            user_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
-            steps_seen.append(user_msg)
+            for m in messages:
+                if m["role"] == "system":
+                    system_contents.append(m["content"])
+                elif m["role"] == "user":
+                    user_contents.append(m["content"])
             return MagicMock(content="Done.", role="assistant", tool_calls=[])
 
         mock_llm.chat.side_effect = side_effect
@@ -88,14 +92,12 @@ class TestPlanExecuteStrategy:
         import asyncio
         result = asyncio.run(strategy.run(ctx))
 
-        # Phase 1 (plan) + 1 step (fallback, no numbered format) + Phase 3 (finalize) = 3 queries
-        assert len(steps_seen) == 3
+        # Phase 1 (plan) + 1 step + Phase 3 (finalize) = 3 queries
+        assert len(user_contents) == 3
 
-        # Step 2 (execute) should see previous step info
-        execute_call = steps_seen[1]
-        assert "Now execute Step 1/1" in execute_call
-        assert "Research AI testing" in execute_call
+        # Phase 2 execute: task 在第2条 system 消息中，step 指令在 user 区
+        assert "Research AI testing" in system_contents[2]
+        assert "Now execute Step 1/1" in user_contents[1]
 
-        # Finalize should see execute result
-        finalize_call = steps_seen[2]
-        assert "Synthesize the final result" in finalize_call
+        # Phase 3 finalize: user 区包含执行结果汇总
+        assert "Synthesize the final result" in user_contents[2]

@@ -1,4 +1,8 @@
-"""Chain-of-Thought 模式：深度推理 → 最终答案，支持工具调用。"""
+"""Chain-of-Thought 模式：深度推理 → 最终答案，支持工具调用。
+
+KV Cache 优化：system_prompt + frozen task 放在消息前缀，
+每阶段的可变指令放在 user 消息区，最大化 tool_loop 内的前缀缓存命中。
+"""
 
 from agentflow.runtime.thinking.base import ThinkingStrategy, ThinkContext, ThinkResult
 
@@ -18,11 +22,15 @@ class CoTStrategy(ThinkingStrategy):
         tools_param = context.tools if context.tools else None
 
         # Phase 1: Deep thinking
-        think_messages = [{"role": "system", "content": context.system_prompt}]
+        # 前缀区：system_prompt → frozen task → references → 全部命中缓存
+        # 变量区：仅 think 指令放在 user 消息尾部
+        think_messages = [
+            {"role": "system", "content": context.system_prompt},
+            {"role": "system", "content": f"Question: {context.user_input}"},
+        ]
         for ref_msg in context.reference_messages:
             think_messages.append(dict(ref_msg))
         think_messages.append({"role": "user", "content": (
-            f"Question: {context.user_input}\n\n"
             "Think through this step by step. Consider all angles, "
             "break down the problem, and reason carefully before arriving at a conclusion."
         )})
@@ -33,7 +41,12 @@ class CoTStrategy(ThinkingStrategy):
         all_tool_calls.extend(think_tool_calls)
 
         # Phase 2: Final answer
-        answer_messages = [{"role": "system", "content": context.system_prompt}]
+        # 前缀区：system_prompt → frozen task → references → 缓存命中
+        # 变量区：think 结果 + answer 指令
+        answer_messages = [
+            {"role": "system", "content": context.system_prompt},
+            {"role": "system", "content": f"Question: {context.user_input}"},
+        ]
         for ref_msg in context.reference_messages:
             answer_messages.append(dict(ref_msg))
         answer_messages.extend([
