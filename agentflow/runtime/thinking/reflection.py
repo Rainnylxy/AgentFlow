@@ -32,7 +32,7 @@ class ReflectionWrapper(ThinkingStrategy):
                     "FAIL: <reason> if there is an issue that needs correction."
                 )},
             ]
-            review_response = await context.llm_client.chat(review_messages)
+            review_response = await context.llm_client.chat(review_messages, max_tokens=context.max_output_tokens)
             review_text = review_response.content.strip()
             all_notes.append(review_text)
 

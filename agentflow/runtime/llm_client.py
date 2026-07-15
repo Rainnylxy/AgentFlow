@@ -65,7 +65,8 @@ class LLMClient(ABC):
         self._retry_on_status = retry_on_status or {429, 500, 502, 503, 504}
 
     async def chat(
-        self, messages: list[dict], tools: Optional[list[dict]] = None
+        self, messages: list[dict], tools: Optional[list[dict]] = None,
+        max_tokens: Optional[int] = None,
     ) -> LLMResponse:
         """发送消息并返回 LLM 响应，自动重试。
 
@@ -76,7 +77,7 @@ class LLMClient(ABC):
         for attempt in range(self.max_retries + 1):
             try:
                 return await asyncio.wait_for(
-                    self._do_chat(messages, tools),
+                    self._do_chat(messages, tools, max_tokens=max_tokens),
                     timeout=self.timeout,
                 )
             except asyncio.TimeoutError:
@@ -123,7 +124,8 @@ class LLMClient(ABC):
 
     @abstractmethod
     async def _do_chat(
-        self, messages: list[dict], tools: Optional[list[dict]] = None
+        self, messages: list[dict], tools: Optional[list[dict]] = None,
+        max_tokens: Optional[int] = None,
     ) -> LLMResponse:
         """子类实现实际的 LLM API 调用（不含重试逻辑）。"""
         ...
@@ -173,11 +175,14 @@ class OpenAIClient(LLMClient):
         )
 
     async def _do_chat(
-        self, messages: list[dict], tools: Optional[list[dict]] = None
+        self, messages: list[dict], tools: Optional[list[dict]] = None,
+        max_tokens: Optional[int] = None,
     ) -> LLMResponse:
         kwargs = {"model": self.model, "messages": messages}
         if tools:
             kwargs["tools"] = tools
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
 
         completion = await self.client.chat.completions.create(**kwargs)
         choice = completion.choices[0]

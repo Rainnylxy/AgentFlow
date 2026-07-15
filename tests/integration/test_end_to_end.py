@@ -149,7 +149,7 @@ class TestAgentRuntimeEndToEnd:
         """
         mock = AsyncMock()
 
-        async def chat_side_effect(messages, tools=None):
+        async def chat_side_effect(messages, tools=None, **kwargs):
             if responses:
                 return responses.pop(0)
             # 如果响应用完，返回空回答（模拟 LLM 无更多工具调用）

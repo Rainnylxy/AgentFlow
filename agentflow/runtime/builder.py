@@ -62,6 +62,8 @@ class AgentBuilder:
         self._prompt_template = None
         self._thinking_mode = ThinkingMode.ADAPTIVE
         self._max_iterations = 10
+        self._max_output_tokens = None
+        self._max_input_tokens = None
         self._system_prompt_str = None
         self._skills_dir = Path("skills")  # 默认 skills/ 目录
         self._skill_names: list[str] = []
@@ -131,6 +133,15 @@ class AgentBuilder:
         self._max_iterations = n
         return self
 
+    def with_max_output_tokens(self, n: int) -> "AgentBuilder":
+        self._max_output_tokens = n
+        return self
+
+    def with_max_input_tokens(self, n: int) -> "AgentBuilder":
+        """设置输入上下文窗口的 token 上限（WorkingMemory 截断阈值）。"""
+        self._max_input_tokens = n
+        return self
+
     def build_sync(self) -> BaseAgent:
         """同步版 build()，向后兼容。"""
         import asyncio
@@ -156,6 +167,9 @@ class AgentBuilder:
             if self._prompt_template:
                 self._prompt_template.add(SkillSection(skill))
 
+        if self._max_input_tokens is not None:
+            self._memory_profile.working.max_tokens = self._max_input_tokens
+
         memory = MemoryManager(profile=self._memory_profile)
         thinking_engine = ThinkingEngine(mode=self._thinking_mode, toolkit=self._toolkit)
 
@@ -180,6 +194,7 @@ class AgentBuilder:
             memory=memory,
             thinking_engine=thinking_engine,
             max_iterations=self._max_iterations,
+            max_output_tokens=self._max_output_tokens,
             skills=skills,
             reference=self._reference,
         )
@@ -192,7 +207,7 @@ class _BuiltAgent(BaseAgent):
     Skill 激活采用真实懒加载——LLM 调用 activate_skill:xxx 工具时才加载。
     """
 
-    def __init__(self, name, llm_client, system_prompt, toolkit, memory, thinking_engine, max_iterations, skills=None, reference=None):
+    def __init__(self, name, llm_client, system_prompt, toolkit, memory, thinking_engine, max_iterations, max_output_tokens=None, skills=None, reference=None):
         super().__init__(
             name=name,
             llm_client=llm_client,
@@ -200,6 +215,7 @@ class _BuiltAgent(BaseAgent):
             tool_registry=toolkit,
             memory_manager=memory,
             max_iterations=max_iterations,
+            max_output_tokens=max_output_tokens,
         )
         self.thinking_engine = thinking_engine
         self.toolkit = toolkit
@@ -331,6 +347,7 @@ class _BuiltAgent(BaseAgent):
             llm_client=self.llm_client,
             memory=self.memory,
             max_iterations=self.max_iterations,
+            max_output_tokens=self.max_output_tokens,
             stream=stream,
             skill_tool_map=skill_tool_map,
             agent_trace=agent_trace,

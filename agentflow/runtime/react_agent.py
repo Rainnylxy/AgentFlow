@@ -71,7 +71,7 @@ class ReActAgent(BaseAgent):
                     for t in tool_list
                 ]
 
-            response = await self.llm_client.chat(messages, tools=tools)
+            response = await self.llm_client.chat(messages, tools=tools, max_tokens=self.max_output_tokens)
 
             # 如果有 tool_call，执行工具
             if response.tool_calls:

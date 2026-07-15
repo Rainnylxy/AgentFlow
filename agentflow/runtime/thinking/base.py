@@ -23,6 +23,7 @@ class ThinkContext:
     llm_client: object
     memory: object
     max_iterations: int = 10
+    max_output_tokens: Optional[int] = None
     feedback: list[str] = field(default_factory=list)
     stream: Optional[Callable[[StreamEvent], Awaitable[None]]] = None
     skill_tool_map: dict[str, str] = field(default_factory=dict)  # use_skill_xxx → skill_name
@@ -136,7 +137,7 @@ class ThinkingStrategy(ABC):
                 trace.turns.append(turn)
                 trace.total_turns = len(trace.turns)
 
-            response = await context.llm_client.chat(messages, tools=tools_param)
+            response = await context.llm_client.chat(messages, tools=tools_param, max_tokens=context.max_output_tokens)
 
             if response.tool_calls:
                 # 回填本轮思考内容和 LLM 响应元信息

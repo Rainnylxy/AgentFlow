@@ -35,7 +35,7 @@ class TestReflectionWrapper:
         call_count = [0]
         mock_llm = AsyncMock()
 
-        async def side_effect(messages, tools=None):
+        async def side_effect(messages, tools=None, **kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
                 return MagicMock(content="Wrong answer 100.", role="assistant", tool_calls=[])
