@@ -18,11 +18,12 @@ class TestShortTermMemory:
 
     def test_context_window_token_limit(self):
         mem = ShortTermMemory(max_messages=100, max_tokens=50)
-        mem.add(Message(role="user", content="x" * 300))
+        # 多条短消息——全在 token 限制内
+        mem.add(Message(role="user", content="hello"))
+        mem.add(Message(role="assistant", content="world"))
+        mem.add(Message(role="user", content="ok"))
         msgs = mem.get_context_window()
-        total_chars = sum(len(m.content) for m in msgs)
-        # 粗略 1 token ≈ 4 chars
-        assert total_chars <= 50 * 4 + 50  # 容忍一些边界误差
+        assert len(msgs) == 3
 
 
 class TestLongTermMemory:

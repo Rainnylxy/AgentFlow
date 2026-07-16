@@ -1,18 +1,23 @@
 """Memory Manager — 三层记忆系统的统一管理入口。
 
 协调 Working / Episodic / Semantic 三层记忆，
-提供自主记忆门、遗忘门、检索门。
+提供自主记忆门、遗忘门、检索门、压缩门。
 
 事实提取策略可通过 fact_extractor 参数注入，
 默认使用 KeywordFactExtractor（关键词模式匹配）。
+
+WorkingMemory 压缩策略：当消息被 max_turns 挤出窗口时，
+post_turn 阶段自动调用 LLM 将溢出消息压缩为摘要，
+注入到上下文窗口头部。
 """
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Callable, Awaitable
 from agentflow.runtime.memory.working import WorkingMemory, Message
 from agentflow.runtime.memory.episodic import EpisodicMemory, MemoryFact
 from agentflow.runtime.memory.semantic import SemanticMemory
+from agentflow.runtime.memory.token_counter import TokenCounter
 from agentflow.runtime.memory.fact_extractor import (
     BaseFactExtractor,
     KeywordFactExtractor,
@@ -36,10 +41,11 @@ class MemoryProfile:
     auto_memorize: bool = True
     auto_forget: bool = True
     auto_retrieve: bool = True
+    auto_compress: bool = True  # post_turn 时自动压缩溢出消息
 
     @classmethod
     def light(cls) -> "MemoryProfile":
-        return cls(working=WorkingConfig(max_turns=10), episodic_max=0)
+        return cls(working=WorkingConfig(max_turns=10), episodic_max=0, auto_compress=False)
 
     @classmethod
     def standard(cls) -> "MemoryProfile":
@@ -58,14 +64,18 @@ class MemoryManager:
     """三层记忆管理器 — Agent 自主管理记忆生命周期。
 
     用法:
-        mgr = MemoryManager()
+        mgr = MemoryManager(summarizer=llm_summarize)
         facts = mgr.pre_turn("user question")   # 检索门
         # ... run LLM turn using mgr.working ...
-        await mgr.post_turn()                    # 记忆门 + 遗忘门
+        await mgr.post_turn()                    # 记忆门 + 遗忘门 + 压缩门
 
     事实提取策略:
         mgr = MemoryManager(fact_extractor=NoOpFactExtractor())  # 不提取事实
         mgr = MemoryManager(fact_extractor=LLMFactExtractor(llm))  # LLM 驱动
+
+    WorkingMemory 压缩:
+        mgr = MemoryManager(summarizer=my_summarizer)  # 启用自动压缩
+        # post_turn 时自动将溢出消息压缩为摘要
 
     Backward-compatible attributes:
         .short_term  -> alias for .working
@@ -77,18 +87,23 @@ class MemoryManager:
         profile: Optional["MemoryProfile"] = None,
         verbose: bool = False,
         fact_extractor: Optional["BaseFactExtractor"] = None,
+        summarizer: Optional[Callable[[list[Message]], Awaitable[str]]] = None,
+        token_counter: Optional["TokenCounter"] = None,
     ):
         self.profile = profile or MemoryProfile.standard()
         self.verbose = verbose
         self.working = WorkingMemory(
             max_turns=self.profile.working.max_turns,
             max_tokens=self.profile.working.max_tokens,
+            summarizer=summarizer,
+            token_counter=token_counter,
         )
         self.episodic = EpisodicMemory(max_facts=self.profile.episodic_max)
         self.semantic = SemanticMemory(embedder=self.profile.semantic_embedder)
         self._turn_count = 0
         self._last_extracted: list[MemoryFact] = []
         self._last_forgotten: int = 0
+        self._last_compressed: str | None = None
 
         # 事实提取策略：light profile 默认不提取，其余默认关键词
         if fact_extractor is not None:
@@ -133,12 +148,15 @@ class MemoryManager:
         return facts
 
     async def post_turn(self) -> None:
-        """记忆门 + 遗忘门：每个 turn 之后触发（异步）。"""
+        """记忆门 + 遗忘门 + 压缩门：每个 turn 之后触发（异步）。"""
         if self.profile.auto_memorize:
             await self._extract_facts()
 
         if self.profile.auto_forget:
             self._last_forgotten = self.episodic.forget_expired()
+
+        if self.profile.auto_compress and self.working.needs_compression:
+            self._last_compressed = await self.working.compress()
 
     async def _extract_facts(self) -> None:
         """从工作记忆中提取结构化事实，委托给注入的 FactExtractor 策略。

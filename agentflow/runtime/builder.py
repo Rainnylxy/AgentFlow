@@ -170,7 +170,29 @@ class AgentBuilder:
         if self._max_input_tokens is not None:
             self._memory_profile.working.max_tokens = self._max_input_tokens
 
-        memory = MemoryManager(profile=self._memory_profile)
+        # 构建 WorkingMemory 压缩器：将溢出消息用 LLM 压缩为摘要
+        summarizer = None
+        if self._llm_client is not None:
+            llm = self._llm_client
+
+            async def summarize(msgs) -> str:
+                lines = []
+                for m in msgs:
+                    role = m.role if hasattr(m, 'role') else getattr(m, 'role', 'unknown')
+                    content = m.content if hasattr(m, 'content') else str(m)
+                    lines.append(f"[{role}]: {content}")
+                conversation = "\n".join(lines)
+                resp = await llm.chat([{"role": "user", "content": (
+                    "Summarize the following conversation excerpt. "
+                    "Preserve key facts, user preferences, decisions made, "
+                    "and any important context. Be concise.\n\n"
+                    f"{conversation}"
+                )}], max_tokens=512)
+                return f"[Conversation Summary]\n{resp.content}"
+
+            summarizer = summarize
+
+        memory = MemoryManager(profile=self._memory_profile, summarizer=summarizer)
         thinking_engine = ThinkingEngine(mode=self._thinking_mode, toolkit=self._toolkit)
 
         # 确定 system prompt
@@ -339,10 +361,19 @@ class _BuiltAgent(BaseAgent):
         # 如果编排器传了 agent_trace 就用它（多 Agent 场景），否则自己建（单 Agent 场景）
         if agent_trace is None:
             agent_trace = AgentTrace(agent_id=self.name)
+
+        # 估算系统区开销：system_prompt + references + tools
+        counter = self.memory.working._counter
+        overhead = counter.count(self.system_prompt)
+        for ref_msg in self.reference.to_messages():
+            overhead += counter.count(ref_msg.get("content", ""))
+        # 每个 tool definition 约 100 tokens（name + description + schema）
+        overhead += len(tools_for_llm) * 100
+
         context = ThinkContext(
             user_input=user_input,
             system_prompt=self.system_prompt,
-            messages=self.memory.working.get_context_window(),
+            messages=self.memory.working.get_context_window(overhead_tokens=overhead),
             tools=tools_for_llm,
             llm_client=self.llm_client,
             memory=self.memory,

@@ -3,6 +3,9 @@ from agentflow.runtime.memory.episodic import EpisodicMemory, MemoryFact
 from agentflow.runtime.memory.semantic import SemanticMemory
 from agentflow.runtime.memory.manager import MemoryManager, MemoryProfile, WorkingConfig
 from agentflow.runtime.memory.reference import Reference
+from agentflow.runtime.memory.token_counter import (
+    TokenCounter, AdaptiveCounter, TiktokenCounter, create_token_counter,
+)
 
 
 class ShortTermMemory(WorkingMemory):
