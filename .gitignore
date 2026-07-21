@@ -6,6 +6,8 @@ dist/
 *.so
 docs/
 .history/
+.pytest_cache/
+.mcp.json
 
 # Go
 engine/agentflow-engine.exe
