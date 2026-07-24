@@ -390,6 +390,75 @@ class TestAgentRuntimeEndToEnd:
         assert result.output is not None
 
     # ------------------------------------------------------------------
+    # ROUTING mode — full pipeline integration test
+    # ------------------------------------------------------------------
+
+    def test_routing_full_pipeline(self):
+        """Full routing pipeline through Builder → ThinkingEngine → RoutingStrategy.
+
+        Verifies that AgentBuilder correctly propagates registry and experts
+        through ThinkingEngine to RoutingStrategy, and that the router
+        selects the correct expert based on the task.
+        """
+        from agentflow.runtime.agent_registry import AgentCapability, AgentRegistry
+        from agentflow.runtime.thinking import ThinkingMode
+
+        registry = AgentRegistry()
+        registry.register(AgentCapability(
+            "math_expert",
+            "Solves math and calculation problems",
+            [],
+            ["What is 2+2?", "Calculate the square root of 144"],
+        ))
+        registry.register(AgentCapability(
+            "weather_expert",
+            "Answers weather and climate questions",
+            [],
+            ["What's the weather today?", "Is it going to rain?"],
+        ))
+
+        # Expert that echoes back its agent_id as output
+        def _make_echo_expert(agent_id):
+            expert = AsyncMock()
+            expert.name = agent_id
+
+            async def run(user_input, stream=None, agent_trace=None):
+                from agentflow.runtime.agent import AgentResult
+                return AgentResult(
+                    output=f"[{agent_id}] handled: {user_input}",
+                    tool_calls=[],
+                    steps=[],
+                )
+
+            expert.run.side_effect = run
+            return expert
+
+        # LLM: first response = route to math_expert (JSON route decision)
+        mock_llm = self._mock_llm([
+            self._tool_response(
+                '{"agent_id": "math_expert", "reason": "This is a math question"}'
+            ),
+        ])
+
+        agent = (
+            AgentBuilder("math_router")
+            .with_llm(mock_llm)
+            .with_registry(registry)
+            .with_experts({
+                "math_expert": _make_echo_expert("math_expert"),
+                "weather_expert": _make_echo_expert("weather_expert"),
+            })
+            .with_thinking(ThinkingMode.ROUTING)
+            .build_sync()
+        )
+
+        result = asyncio.run(agent.run("What is 2 times 3?"))
+
+        assert result.output is not None
+        assert "[math_expert]" in result.output
+        assert result.steps is not None
+
+    # ------------------------------------------------------------------
     # ROUTING mode validation tests
     # ------------------------------------------------------------------
 

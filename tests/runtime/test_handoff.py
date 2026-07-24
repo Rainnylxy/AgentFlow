@@ -7,7 +7,6 @@ class TestHandoffRequest:
         hr = HandoffRequest(
             reason="Not my domain",
             suggested_agent="payment_agent",
-            suggested_since="payments are payment_agent's specialty",
             partial_result="I found the order but can't process the payment.",
         )
         assert hr.reason == "Not my domain"
@@ -18,7 +17,6 @@ class TestHandoffRequest:
         hr = HandoffRequest(
             reason="Out of scope",
             suggested_agent="",
-            suggested_since="",
             partial_result="",
         )
         assert hr.reason == "Out of scope"
@@ -45,7 +43,6 @@ class TestRouteResult:
         ho = HandoffRequest(
             reason="Cross-border not supported",
             suggested_agent="cross_border_agent",
-            suggested_since="They handle international",
             partial_result="Order #456 is valid, amount is $100 USD.",
         )
         rr = RouteResult(

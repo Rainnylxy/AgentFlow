@@ -13,8 +13,11 @@ State machine:
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from agentflow.runtime.agent import AgentResult
 from agentflow.runtime.agent_registry import AgentCapability, AgentRegistry
@@ -260,7 +263,11 @@ class RoutingStrategy(ThinkingStrategy):
                     if cap.agent_id.lower() == agent_id.lower():
                         return cap.agent_id
         except Exception:
-            pass
+            logger.warning(
+                "LLM routing call failed for task '%s', falling back to top-scoring candidate.",
+                context.user_input[:100],
+                exc_info=True,
+            )
 
         return None
 

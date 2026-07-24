@@ -22,8 +22,6 @@ class HandoffRequest:
     reason: str = ""
     #: Natural language description of who can help (NOT agent_id).
     suggested_agent: str = ""
-    #: Why this suggestion makes sense.
-    suggested_since: str = ""
     #: What the expert already figured out.
     partial_result: str = ""
 
