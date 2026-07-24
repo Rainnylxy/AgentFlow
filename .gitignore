@@ -8,6 +8,8 @@ docs/
 .history/
 .pytest_cache/
 .mcp.json
+skills-lock.json
+*.superpowers
 
 # Go
 engine/agentflow-engine.exe
