@@ -1,4 +1,5 @@
 """Tests for RoutingStrategy — dynamic expert routing with handoff loop."""
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 from agentflow.runtime.agent import AgentResult
@@ -69,7 +70,6 @@ class TestRoutingStrategy:
         )
 
         strategy = RoutingStrategy(registry=registry, experts=experts)
-        import asyncio
         result = asyncio.run(strategy.run(ctx))
 
         assert result.mode_used == "routing"
@@ -133,7 +133,6 @@ class TestRoutingStrategy:
         )
 
         strategy = RoutingStrategy(registry=registry, experts=experts)
-        import asyncio
         result = asyncio.run(strategy.run(ctx))
 
         assert result.mode_used == "routing"
@@ -161,7 +160,6 @@ class TestRoutingStrategy:
         )
 
         strategy = RoutingStrategy(registry=registry, experts=experts)
-        import asyncio
         result = asyncio.run(strategy.run(ctx))
 
         assert result.mode_used == "routing"
@@ -223,7 +221,6 @@ class TestRoutingStrategy:
         )
 
         strategy = RoutingStrategy(registry=registry, experts=experts, max_handoffs=2)
-        import asyncio
         result = asyncio.run(strategy.run(ctx))
 
         assert result.mode_used == "routing"
