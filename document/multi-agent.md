@@ -361,6 +361,124 @@ edges = [
 ]
 ```
 
+## 动态路由（Dynamic Routing）
+
+静态 DAG 要求所有 Agent 节点和边在 Workflow 定义时就固定好。动态路由则允许**运行时**根据任务语义自动选择最合适的专家 Agent，并支持专家之间的 handoff 转交。
+
+### 核心组件
+
+#### AgentRegistry — 能力注册与语义匹配
+
+每个专家 Agent 注册时声明自己的能力卡：
+
+```python
+from agentflow.runtime.agent_registry import AgentCapability, AgentRegistry
+
+registry = AgentRegistry()
+registry.register(AgentCapability(
+    agent_id="refund_expert",
+    description="处理退款、账单、支付纠纷",
+    tools=["lookup_refund", "process_refund"],
+    examples=["如何退款？", "我的退款在哪里？"],
+    priority=0,
+))
+registry.register(AgentCapability(
+    agent_id="shipping_expert",
+    description="处理发货、物流追踪、配送问题",
+    tools=["track_order", "update_address"],
+    examples=["我的包裹在哪？", "修改收货地址"],
+    priority=0,
+))
+registry.register(AgentCapability(
+    agent_id="general_cs",
+    description="通用客服、问候、简单咨询",
+    tools=[],
+    examples=["你好", "你们几点下班？"],
+))
+
+# 语义匹配：Jaccard 相似度 + priority 加权
+candidates = registry.match("我想退款我的订单", top_k=3)
+# → [(refund_expert, 0.85), (general_cs, 0.20), (shipping_expert, 0.15)]
+```
+
+**匹配策略**：v1 使用 Jaccard 关键词相似度，priority 每点 +1% 加权。升级路径预留 embedding 向量检索接口。
+
+#### RoutingStrategy — 路由编排策略
+
+新增 `ThinkingMode.ROUTING`，与 ReAct / CoT / PlanExecute 同级，核心状态机：
+
+```
+ANALYZE → ROUTE → EXECUTE → CHECK_HANDOFF
+   ^                            |
+   |        (handoff)           |
+   +--- back to ANALYZE --------+
+   |        (no handoff)        |
+   +--- DONE -------------------+
+```
+
+- **ANALYZE**：`registry.match()` 语义匹配，返回 top-3 候选
+- **ROUTE**：LLM 从候选中选择最优专家（带理由）
+- **EXECUTE**：直接调用 `expert.run()`，保留完整的记忆/工具/思考链
+- **CHECK_HANDOFF**：检测专家是否发出 handoff 信号，是则重新路由
+
+#### Handoff 协议 — Agent 间任务转交
+
+专家在无法完成任务时，通过标准化的文本块发出转交信号：
+
+```
+---HANDOFF---
+reason: 跨境支付不在我的范围内
+suggest: 处理国际汇款和跨境支付的代理
+context: 用户需要向英国账户汇款 £500，账户已验证
+---END---
+```
+
+```python
+from agentflow.runtime.handoff import parse_handoff_block
+
+handoff = parse_handoff_block(expert_output)
+if handoff:
+    print(f"Reason: {handoff.reason}")
+    print(f"Suggested: {handoff.suggested_agent}")
+    print(f"Partial result: {handoff.partial_result}")
+```
+
+### 用法：Builder 一行开启
+
+```python
+from agentflow.runtime.builder import AgentBuilder
+from agentflow.runtime.thinking import ThinkingMode
+
+router = (
+    AgentBuilder("support_router")
+    .with_llm(llm_client)
+    .with_registry(registry)
+    .with_experts({
+        "refund_expert": refund_agent,
+        "shipping_expert": shipping_agent,
+        "general_cs": cs_agent,
+    })
+    .with_thinking(ThinkingMode.ROUTING)
+    .with_max_iterations(10)
+    .build_sync()
+)
+
+result = await router.run("我想退款我的订单 #12345")
+# → 自动路由到 refund_expert，输出退款结果
+```
+
+### 与静态 DAG 的关系
+
+静态 DAG 和动态路由**互补**，不是互斥：
+
+| 场景                             | 推荐方式                |
+| -------------------------------- | ----------------------- |
+| 流程固定（订单处理、审批流水线） | 静态 DAG                |
+| 任务多样、需要语义匹配           | 动态路由                |
+| 混合场景                         | DAG 中嵌入 ROUTING 节点 |
+
+动态路由的 Router 本身是一个 AGENT 节点，可以放进 DAG 的任意位置。它使用 `ThinkingMode.ROUTING` 思考策略，与 ReAct / CoT 一样通过 `AgentBuilder` 构建。
+
 ## 最佳实践
 
 1. **先画 DAG 再写代码**：用 `agentflow/dsl/visualizer.py` 生成 Mermaid 图，确认拓扑正确
@@ -368,3 +486,5 @@ edges = [
 3. **Human 节点必须设超时**：避免 Workflow 因等待人工输入永久挂起
 4. **AGENT 节点用不同模型**：计算密集用 gpt-4o-mini，推理密集用 gpt-4o，控制成本
 5. **编排器传 trace 给 Agent**：多 Agent 场景下编排器创建 `WorkflowTrace`，每个 Agent 拿到注入的 `AgentTrace`，确保追踪完整
+6. **Capability 描述要具体**：`description` 和 `examples` 的质量直接决定路由准确度，用自然语言写清楚"能做什么、不能做什么"
+7. **Handoff 上限设为 3 次**：防止无限转交，Router 在 `max_handoffs` 次后自动终止并返回部分结果
