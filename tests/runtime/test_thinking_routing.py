@@ -174,12 +174,16 @@ class TestRoutingStrategy:
         """Experts keep handing off; stops after max_handoffs cycles."""
         # Need more agents than max_handoffs+1 so we can exhaust
         # the handoff limit before running out of available agents.
+        # Use descriptions that all match the task input.
         registry = AgentRegistry()
-        for i in range(4):
-            registry.register(AgentCapability(
-                agent_id=f"agent_{chr(ord('a') + i)}",
-                description=f"Handles {chr(ord('A') + i)} type tasks",
-            ))
+        agents_def = [
+            ("agent_a", "Handles complex analytical tasks"),
+            ("agent_b", "Handles complex billing tasks"),
+            ("agent_c", "Handles complex reporting tasks"),
+            ("agent_d", "Handles complex query tasks"),
+        ]
+        for agent_id, desc in agents_def:
+            registry.register(AgentCapability(agent_id=agent_id, description=desc))
 
         handoff_text = (
             "---HANDOFF---\n"
