@@ -68,6 +68,8 @@ class AgentBuilder:
         self._skills_dir = Path("skills")  # 默认 skills/ 目录
         self._skill_names: list[str] = []
         self._reference = Reference()  # 参考卡，跨 run 持久，永不裁剪
+        self._registry = None
+        self._experts: dict = {}
 
     def with_llm(self, llm_client) -> "AgentBuilder":
         self._llm_client = llm_client
@@ -100,6 +102,14 @@ class AgentBuilder:
 
     def with_thinking(self, mode: ThinkingMode) -> "AgentBuilder":
         self._thinking_mode = mode
+        return self
+
+    def with_registry(self, registry) -> "AgentBuilder":
+        self._registry = registry
+        return self
+
+    def with_experts(self, experts: dict) -> "AgentBuilder":
+        self._experts = experts
         return self
 
     def with_skill(self, skill_name: str) -> "AgentBuilder":
@@ -192,8 +202,25 @@ class AgentBuilder:
 
             summarizer = summarize
 
+        if self._thinking_mode == ThinkingMode.ROUTING:
+            if self._registry is None:
+                raise ValueError(
+                    "ThinkingMode.ROUTING requires a registry. "
+                    "Call builder.with_registry(registry) before build()."
+                )
+            if not self._experts:
+                raise ValueError(
+                    "ThinkingMode.ROUTING requires at least one expert. "
+                    "Call builder.with_experts({...}) before build()."
+                )
+
         memory = MemoryManager(profile=self._memory_profile, summarizer=summarizer)
-        thinking_engine = ThinkingEngine(mode=self._thinking_mode, toolkit=self._toolkit)
+        thinking_engine = ThinkingEngine(
+            mode=self._thinking_mode,
+            toolkit=self._toolkit,
+            registry=self._registry,
+            experts=self._experts,
+        )
 
         # 确定 system prompt
         if self._system_prompt_str:

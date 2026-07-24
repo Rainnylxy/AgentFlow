@@ -7,6 +7,8 @@ import asyncio
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from agentflow.dsl.types import Node, Edge, Workflow, NodeKind
 from agentflow.dsl.validator import validate_dag
 from agentflow.dsl.graph import topological_sort, parallel_groups
@@ -386,3 +388,37 @@ class TestAgentRuntimeEndToEnd:
         result = asyncio.run(agent.run("1除以0等于多少？"))
         assert result is not None
         assert result.output is not None
+
+    # ------------------------------------------------------------------
+    # ROUTING mode validation tests
+    # ------------------------------------------------------------------
+
+    def test_builder_with_routing_missing_experts(self):
+        """ROUTING mode without experts should raise clear error."""
+        from agentflow.runtime.agent_registry import AgentCapability, AgentRegistry
+        from agentflow.runtime.thinking import ThinkingMode
+
+        registry = AgentRegistry()
+        registry.register(AgentCapability("test_expert", "Test expert", [], ["test"]))
+
+        with pytest.raises(ValueError, match="ROUTING requires at least one expert"):
+            (
+                AgentBuilder("router")
+                .with_llm(self._mock_llm([self._tool_response("ok")]))
+                .with_registry(registry)
+                .with_thinking(ThinkingMode.ROUTING)
+                .build_sync()
+            )
+
+    def test_builder_with_routing_missing_registry(self):
+        """ROUTING mode without registry should raise clear error."""
+        from agentflow.runtime.thinking import ThinkingMode
+
+        with pytest.raises(ValueError, match="ROUTING requires a registry"):
+            (
+                AgentBuilder("router")
+                .with_llm(self._mock_llm([self._tool_response("ok")]))
+                .with_experts({"test": MagicMock()})
+                .with_thinking(ThinkingMode.ROUTING)
+                .build_sync()
+            )

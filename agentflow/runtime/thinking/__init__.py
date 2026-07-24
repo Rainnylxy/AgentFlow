@@ -11,6 +11,7 @@ from agentflow.runtime.thinking.plan_execute import PlanExecuteStrategy
 from agentflow.runtime.thinking.cot import CoTStrategy
 from agentflow.runtime.thinking.reflection import ReflectionWrapper
 from agentflow.runtime.thinking.adaptive import AdaptiveRouter
+from agentflow.runtime.thinking.routing import RoutingStrategy
 
 
 class ThinkingMode(str, Enum):
@@ -18,6 +19,7 @@ class ThinkingMode(str, Enum):
     PLAN_EXECUTE = "plan_execute"
     COT = "cot"
     ADAPTIVE = "adaptive"
+    ROUTING = "routing"
 
     def with_reflection(self, depth: int = 3) -> "ThinkingMode":
         """链式调用：给当前模式包裹反思层。"""
@@ -33,9 +35,11 @@ class ThinkingEngine:
         result = await engine.run(context)
     """
 
-    def __init__(self, mode: ThinkingMode = ThinkingMode.ADAPTIVE, toolkit=None):
+    def __init__(self, mode: ThinkingMode = ThinkingMode.ADAPTIVE, toolkit=None, registry=None, experts=None):
         self.mode = mode
         self.toolkit = toolkit
+        self.registry = registry
+        self.experts = experts or {}
         self._reflection_depth = getattr(mode, '_reflection_depth', 0)
 
     def _build_strategy(self, base: ThinkingStrategy) -> ThinkingStrategy:
@@ -44,6 +48,15 @@ class ThinkingEngine:
         return base
 
     def resolve_strategy(self, user_input: str, tools: list) -> ThinkingStrategy:
+        if self.mode == ThinkingMode.ROUTING:
+            if self.registry is None:
+                raise ValueError("ThinkingMode.ROUTING requires a registry.")
+            return RoutingStrategy(
+                registry=self.registry,
+                experts=self.experts,
+                toolkit=self.toolkit,
+            )
+
         if self.mode == ThinkingMode.ADAPTIVE:
             return AdaptiveRouter().route(user_input, tools)
 
@@ -66,4 +79,5 @@ __all__ = [
     "ThinkingStrategy", "ThinkContext", "ThinkResult",
     "ReActStrategy", "PlanExecuteStrategy", "CoTStrategy",
     "ReflectionWrapper", "AdaptiveRouter",
+    "RoutingStrategy",
 ]
