@@ -11,6 +11,70 @@ class ToolType(str, Enum):
     LOCAL = "local"
 
 
+# JSON Schema type → (Python canonical type, display name)
+_SCHEMA_TYPE_MAP: dict[str, tuple] = {
+    "string": (str, "string"),
+    "integer": (int, "integer"),
+    "number": (float, "number"),
+    "boolean": (bool, "boolean"),
+    "array": (list, "array"),
+    "object": (dict, "object"),
+}
+
+
+def _check_type(value, schema_type: str, field_name: str) -> None:
+    """校验 value 的类型是否匹配 JSON Schema type，不匹配抛出 TypeError。"""
+    if schema_type not in _SCHEMA_TYPE_MAP:
+        return  # 未知类型跳过
+    expected_type, display_name = _SCHEMA_TYPE_MAP[schema_type]
+
+    if expected_type is float:
+        # number 接受 int 和 float
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise TypeError(
+                f"Parameter '{field_name}': expected {display_name}, "
+                f"got {type(value).__name__} ({value!r})"
+            )
+        return
+
+    if not isinstance(value, expected_type):
+        raise TypeError(
+            f"Parameter '{field_name}': expected {display_name}, "
+            f"got {type(value).__name__} ({value!r})"
+        )
+
+
+def _validate_by_schema(inputs: dict, parameters: dict) -> dict:
+    """按 JSON Schema 校验输入参数，校验失败抛出 ValueError / TypeError。"""
+    props = parameters.get("properties", {})
+    required_fields = parameters.get("required", [])
+    validated = dict(inputs)
+
+    # 1. 必填字段检查
+    for field in required_fields:
+        if field not in validated:
+            raise ValueError(
+                f"Missing required parameter: '{field}'. "
+                f"Required: {required_fields}"
+            )
+
+    # 2. 每个字段类型检查
+    for field, value in list(validated.items()):
+        field_schema = props.get(field)
+        if field_schema is None:
+            continue  # 未知字段放行，LLM 可能加多余字段
+        schema_type = field_schema.get("type")
+        if schema_type:
+            _check_type(value, schema_type, field)
+
+    # 3. 填充默认值
+    for field, field_schema in props.items():
+        if field not in validated and "default" in field_schema:
+            validated[field] = field_schema["default"]
+
+    return validated
+
+
 @dataclass
 class Tool:
     name: str
@@ -22,10 +86,12 @@ class Tool:
     params_model: Optional[Any] = None  # Pydantic BaseModel subclass for validation
 
     def validate_params(self, inputs: dict) -> dict:
-        """用 Pydantic 模型校验参数，校验失败抛出 ValidationError。"""
+        """校验参数：Pydantic Model 优先，否则按 JSON Schema 校验。"""
         if self.params_model is not None:
             validated = self.params_model(**inputs)
             return validated.model_dump()
+        if self.parameters:
+            return _validate_by_schema(inputs, self.parameters)
         return inputs
 
 
