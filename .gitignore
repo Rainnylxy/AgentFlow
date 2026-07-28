@@ -9,7 +9,7 @@ docs/
 .pytest_cache/
 .mcp.json
 .superpowers/
-
+*.html
 # Go
 engine/agentflow-engine.exe
 *.exe
