@@ -162,7 +162,9 @@ def dev(
 ):
     """启动开发服务器，运行 Workflow 并查看 Trace。"""
     from agentflow.dsl.serializer import from_yaml
+    from agentflow.dsl.types import NodeKind
     from agentflow.runtime.orchestrator import DAGExecutor
+    from agentflow.runtime.thinking import ThinkingMode
 
     # 加载 Workflow
     console.print(f"[blue]>> 加载 Workflow: {workflow_path}[/blue]")
@@ -182,42 +184,94 @@ def dev(
     console.print()
     console.print(Panel(to_mermaid(wf), title="DAG 可视化", border_style="dim"))
 
-    # 创建 agent_fn
-    if dry_run:
+    # 构建 node_id → Agent 映射
+    agents: dict[str, object] = {}
+    api_key = os.getenv("AGENTFLOW_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+    base_url = os.getenv("AGENTFLOW_BASE_URL") or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
-        async def agent_fn(node_id: str, ctx: dict) -> str:
-            return f"[dry-run] output from {node_id}"
-
-        console.print("[yellow][*]  干跑模式 — 不调用 LLM[/yellow]")
-    else:
-        # 尝试连接 LLM
-        api_key = os.getenv("AGENTFLOW_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+    if dry_run or not api_key:
         if not api_key:
             console.print("[yellow]!!  未设置 AGENTFLOW_API_KEY，使用干跑模式[/yellow]")
-
-            async def agent_fn(node_id: str, ctx: dict) -> str:
-                return f"[no-llm] output from {node_id}"
         else:
-            from agentflow.runtime.llm_client import OpenAIClient
+            console.print("[yellow][*]  干跑模式 — 不调用 LLM[/yellow]")
 
-            llm = OpenAIClient(
-                api_key=api_key,
-                model=llm_model,
-            )
+        async def agent_fn(node_id: str, ctx: dict, _stream=None) -> str:
+            return f"[dry-run] output from {node_id}"
+    else:
+        from agentflow.runtime.llm_client import OpenAIClient
+        from agentflow.runtime.builder import AgentBuilder
+        from agentflow.runtime.memory.manager import MemoryProfile
+        from agentflow.runtime.tool_registry import ToolRegistry
 
-            async def agent_fn(node_id: str, ctx: dict) -> str:
-                msgs = ctx.get("incoming_messages", [])
+        # 全局 ToolRegistry：收集所有节点引用的工具
+        tool_registry = ToolRegistry()
+        _default_tools = {}  # 示例工具池，实际项目从 agentflow.yaml 或插件加载
+
+        llm = OpenAIClient(api_key=api_key, model=llm_model, base_url=base_url)
+
+        _thinking_map = {
+            "react": ThinkingMode.REACT,
+            "cot": ThinkingMode.COT,
+            "plan_execute": ThinkingMode.PLAN_EXECUTE,
+            "adaptive": ThinkingMode.ADAPTIVE,
+        }
+        _memory_map = {
+            "light": MemoryProfile.light(),
+            "standard": MemoryProfile.standard(),
+            "deep": MemoryProfile.deep(),
+        }
+
+        for node in wf.nodes:
+            if node.kind != NodeKind.AGENT:
+                continue
+            cfg = node.agent
+            builder = AgentBuilder(node.id).with_llm(llm).with_max_iterations(10)
+
+            # prompt
+            if cfg and cfg.prompt:
+                builder.with_prompt(cfg.prompt)
+
+            # thinking mode
+            if cfg and cfg.thinking:
+                mode = _thinking_map.get(cfg.thinking, ThinkingMode.ADAPTIVE)
+                builder.with_thinking(mode)
+
+            # memory
+            if cfg and cfg.memory:
+                profile = _memory_map.get(cfg.memory, MemoryProfile.standard())
+                builder.with_memory(profile)
+
+            # tools: 从 tool_registry 查找并注册
+            if cfg and cfg.tools:
+                for tool_name in cfg.tools:
+                    if tool_name in _default_tools:
+                        builder.with_tools(_default_tools[tool_name])
+                    else:
+                        console.print(f"  [yellow]!! 工具 '{tool_name}' 未注册，跳过[/yellow]")
+
+            agent = asyncio.run(builder.build())
+            agents[node.id] = agent
+            console.print(f"  [dim]Agent '{node.id}' 已构建 "
+                          f"(thinking={cfg.thinking if cfg else 'adaptive'}, "
+                          f"memory={cfg.memory if cfg else 'standard'})[/dim]")
+
+        async def agent_fn(node_id: str, ctx: dict, _stream=None) -> str:
+            agent = agents.get(node_id)
+            if agent is None:
+                return f"[no-agent] node '{node_id}' not registered as AGENT"
+            # 构建 user_input：优先取 incoming_messages，否则用 previous_outputs
+            user_input = ctx.get("user_input", "")
+            if not user_input:
                 prev = ctx.get("previous_outputs", {})
-                prompt = f"Task for node '{node_id}'.\n"
                 if prev:
-                    prompt += f"Previous outputs: {list(prev.keys())}\n"
-                if msgs:
-                    prompt += f"Incoming messages: {[m.to_dict() for m in msgs]}\n"
-                try:
-                    resp = await llm.chat([{"role": "user", "content": prompt}])
-                    return resp.content
-                except Exception as e:
-                    return f"[error] {e}"
+                    user_input = f"Previous outputs: {prev}"
+                else:
+                    user_input = "Execute your task."
+            try:
+                result = await agent.run(user_input)
+                return result.output
+            except Exception as e:
+                return f"[error] {e}"
 
     # 执行
     console.print()
@@ -244,6 +298,12 @@ def dev(
     console.print(table)
     console.print(f"[dim]总耗时: {trace.total_duration_ms}ms | "
                   f"分组: {' → '.join(str(g) for g in trace.groups)}[/dim]")
+
+    # 保存 trace
+    from agentflow.trace.tracer import TraceStore
+    store = TraceStore()
+    wid = store.save(trace)
+    console.print(f"[dim]Trace 已保存: {wid}[/dim]")
 
 
 # ---------------------------------------------------------------------------
@@ -327,38 +387,39 @@ def eval(
 def trace(
     trace_id: str = typer.Argument("", help="Trace ID"),
 ):
-    """查看最近的执行轨迹。"""
-    from agentflow.trace.client import TraceClient
-
-    client = TraceClient()
-
+    """查看执行轨迹。"""
     if not trace_id:
-        console.print("[yellow]tip: 运行 'agentflow dev' 后这里会显示 Trace ID[/yellow]")
-        console.print("[dim]用法: agentflow trace <trace_id>[/dim]")
+        console.print("[yellow]用法: agentflow trace <workflow_id>[/yellow]")
+        console.print("[dim]运行 agentflow dev 或 agentflow eval 后获取 workflow_id[/dim]")
         return
 
-    console.print(f"[cyan]>> Trace: {trace_id}[/cyan]")
-
-    # 从内存 TraceClient 查找
-    traces = client._traces if hasattr(client, '_traces') else {}
-    t = traces.get(trace_id)
-    if not t:
-        console.print(f"[red]X Trace 未找到: {trace_id}[/red]")
+    from agentflow.trace.tracer import TraceStore
+    store = TraceStore()
+    t = store.load(trace_id)
+    if t is None:
+        console.print(f"[red]Trace 未找到: {trace_id}[/red]")
         return
 
-    # 显示
-    table = Table(title=f"Trace: {t.trace_id}")
-    table.add_column("Span", style="cyan")
-    table.add_column("状态", style="magenta")
-    table.add_column("耗时(ms)", style="dim")
-    table.add_column("输出", style="green")
+    d = t.to_dict()
+    console.print(f"[cyan]Workflow: {d['workflow_name']}[/cyan]")
+    console.print(f"[dim]总耗时: {d['summary']['total_duration_ms']}ms | "
+                  f"节点: {d['summary']['nodes_executed']} | "
+                  f"失败: {d['summary']['nodes_failed']}[/dim]")
 
-    for span in t.spans:
-        status = "[green]✓[/green]" if span.status == "success" else "[red]✗[/red]"
-        table.add_row(span.name, status, str(span.duration_ms), span.output[:60])
-
-    console.print(table)
-    console.print(f"[dim]Workflow: {t.workflow_id} | 状态: {t.status}[/dim]")
+    for nid, nt in d.get("node_traces", {}).items():
+        console.print(f"\n[bold]{nid}[/bold] — {nt['total_turns']} turns, "
+                      f"{nt['total_tool_calls']} tool calls, "
+                      f"{nt['total_duration_ms']}ms")
+        if nt.get("error"):
+            console.print(f"  [red]error: {nt['error']}[/red]")
+        for turn in nt.get("turns", []):
+            tools_str = ", ".join(
+                tc["tool"] for tc in turn.get("tool_calls", [])
+            ) or "—"
+            console.print(
+                f"  turn {turn['turn']}: {turn['finish_reason']} | "
+                f"tools=[{tools_str}] | {turn['duration_ms']}ms"
+            )
 
 
 # ---------------------------------------------------------------------------

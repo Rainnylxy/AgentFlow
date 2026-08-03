@@ -10,7 +10,7 @@ from agentflow.runtime.thinking.react import ReActStrategy
 from agentflow.runtime.thinking.plan_execute import PlanExecuteStrategy
 from agentflow.runtime.thinking.cot import CoTStrategy
 from agentflow.runtime.thinking.reflection import ReflectionWrapper
-from agentflow.runtime.thinking.adaptive import AdaptiveRouter
+from agentflow.runtime.thinking.adaptive import AdaptiveRouter, LLMAdaptiveRouter
 from agentflow.runtime.thinking.routing import RoutingStrategy
 
 
@@ -41,13 +41,16 @@ class ThinkingEngine:
         self.registry = registry
         self.experts = experts or {}
         self._reflection_depth = getattr(mode, '_reflection_depth', 0)
+        self._llm_router = None  # 按需创建 LLMAdaptiveRouter
 
     def _build_strategy(self, base: ThinkingStrategy) -> ThinkingStrategy:
         if self._reflection_depth > 0:
             return ReflectionWrapper(base, max_reflections=self._reflection_depth)
         return base
 
-    def resolve_strategy(self, user_input: str, tools: list) -> ThinkingStrategy:
+    async def resolve_strategy(
+        self, user_input: str, tools: list, llm_client=None,
+    ) -> ThinkingStrategy:
         if self.mode == ThinkingMode.ROUTING:
             if self.registry is None:
                 raise ValueError("ThinkingMode.ROUTING requires a registry.")
@@ -58,6 +61,10 @@ class ThinkingEngine:
             )
 
         if self.mode == ThinkingMode.ADAPTIVE:
+            if llm_client is not None:
+                if self._llm_router is None:
+                    self._llm_router = LLMAdaptiveRouter(llm_client)
+                return await self._llm_router.route(user_input, tools)
             return AdaptiveRouter().route(user_input, tools)
 
         mapping = {
@@ -69,7 +76,10 @@ class ThinkingEngine:
         return self._build_strategy(base)
 
     async def run(self, context: ThinkContext) -> ThinkResult:
-        strategy = self.resolve_strategy(context.user_input, context.tools)
+        strategy = await self.resolve_strategy(
+            context.user_input, context.tools,
+            llm_client=context.llm_client,
+        )
         result = await strategy.run(context)
         return result
 

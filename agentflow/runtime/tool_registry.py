@@ -1,8 +1,17 @@
 """Tool Registry：统一管理 MCP Server / REST API / 本地函数三种工具"""
 
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class ToolType(str, Enum):
@@ -150,5 +159,255 @@ class ToolRegistry:
             return resp.text
 
     async def _execute_mcp(self, tool: Tool, inputs: dict) -> str:
-        """预留 MCP 调用实现。"""
-        return f"[MCP] {tool.endpoint}: {inputs}"
+        """通过 MCPServerManager 调用 MCP 工具。
+
+        tool.endpoint 格式: "<server_name>:<tool_name>"
+        如 "github:search_repositories"
+        """
+        if not tool.endpoint or ":" not in tool.endpoint:
+            raise ValueError(
+                f"MCP tool '{tool.name}' requires endpoint in format "
+                f"'<server_name>:<tool_name>', got '{tool.endpoint}'"
+            )
+        server_name, mcp_tool_name = tool.endpoint.split(":", 1)
+        manager = MCPServerManager.get_instance()
+        return await manager.call_tool(server_name, mcp_tool_name, inputs)
+
+    def register_mcp_tools(self, server_name: str) -> list[Tool]:
+        """从 .mcp.json 配置注册指定 MCP server 的所有工具。"""
+        manager = MCPServerManager.get_instance()
+        tools_list = asyncio.run(manager.list_tools(server_name))
+        registered = []
+        for td in tools_list:
+            mcp_tool = Tool(
+                name=td.get("name", ""),
+                description=td.get("description", ""),
+                tool_type=ToolType.MCP,
+                endpoint=f"{server_name}:{td.get('name', '')}",
+                parameters=td.get("inputSchema", {}),
+            )
+            self.register(mcp_tool)
+            registered.append(mcp_tool)
+        return registered
+
+    def shutdown_mcp(self) -> None:
+        """关闭所有 MCP server 连接。"""
+        try:
+            manager = MCPServerManager.get_instance()
+            asyncio.run(manager.shutdown())
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# MCP Server Manager — stdio + JSON-RPC 2.0
+# ---------------------------------------------------------------------------
+
+_MCP_REQUEST_TIMEOUT = 30.0
+
+
+class MCPServerManager:
+    """管理 MCP stdio 子进程，提供 JSON-RPC 2.0 通信。
+
+    单例模式，从项目根目录的 .mcp.json 读取服务器配置。
+
+    用法:
+        manager = MCPServerManager.get_instance()
+        tools = await manager.list_tools("github")
+        result = await manager.call_tool("github", "search_repositories", {"query": "AgentFlow"})
+        await manager.shutdown()
+    """
+
+    _instance: Optional["MCPServerManager"] = None
+
+    @classmethod
+    def get_instance(cls) -> "MCPServerManager":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        self._servers: dict[str, dict] = {}       # server_name → {process, session_id, next_id}
+        self._config: dict[str, dict] = {}         # server_name → {command, args, env}
+        self._load_config()
+
+    def _load_config(self) -> None:
+        """从 .mcp.json 加载 MCP server 配置。"""
+        config_path = Path(".mcp.json")
+        if not config_path.exists():
+            logger.debug("No .mcp.json found, MCP servers not configured")
+            return
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Failed to parse .mcp.json: %s", e)
+            return
+        for name, cfg in data.get("mcpServers", {}).items():
+            self._config[name] = {
+                "command": cfg.get("command", ""),
+                "args": cfg.get("args", []),
+                "env": cfg.get("env", {}),
+            }
+
+    async def _ensure_started(self, server_name: str) -> None:
+        """按需启动 MCP server 并完成初始化握手。"""
+        if server_name in self._servers:
+            return
+
+        cfg = self._config.get(server_name)
+        if not cfg:
+            raise ValueError(
+                f"MCP server '{server_name}' not found in .mcp.json. "
+                f"Available: {list(self._config.keys())}"
+            )
+
+        # 解析环境变量
+        env = os.environ.copy()
+        for k, v in cfg.get("env", {}).items():
+            if v.startswith("${") and v.endswith("}"):
+                env_var = v[2:-1]
+                env[k] = os.getenv(env_var, "")
+            else:
+                env[k] = v
+
+        # 启动子进程
+        cmd = [cfg["command"]] + list(cfg.get("args", []))
+        logger.info("Starting MCP server '%s': %s", server_name, " ".join(cmd))
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+
+        # 初始化握手
+        session_id = ""
+        try:
+            init_response = await self._send_request(
+                process, "initialize",
+                {"protocolVersion": "2024-11-05",
+                 "capabilities": {}, "clientInfo": {"name": "agentflow", "version": "0.1.0"}},
+                timeout=_MCP_REQUEST_TIMEOUT,
+            )
+            session_id = (
+                init_response.get("result", {}).get("protocolVersion", "")
+                or init_response.get("result", {}).get("serverInfo", {}).get("name", "")
+            )
+            # 发送 initialized 通知
+            self._send_notification(process, "notifications/initialized", {})
+        except Exception:
+            process.kill()
+            raise
+
+        self._servers[server_name] = {
+            "process": process,
+            "session_id": session_id,
+            "next_id": 1,
+        }
+
+    async def list_tools(self, server_name: str) -> list[dict]:
+        """获取 MCP server 的工具列表。"""
+        await self._ensure_started(server_name)
+        srv = self._servers[server_name]
+        response = await self._send_request(
+            srv["process"], "tools/list", {},
+            timeout=_MCP_REQUEST_TIMEOUT,
+        )
+        tools = response.get("result", {}).get("tools", [])
+        return tools
+
+    async def call_tool(
+        self, server_name: str, tool_name: str, arguments: dict,
+    ) -> str:
+        """调用 MCP server 上的指定工具。"""
+        await self._ensure_started(server_name)
+        srv = self._servers[server_name]
+        response = await self._send_request(
+            srv["process"], "tools/call",
+            {"name": tool_name, "arguments": arguments},
+            timeout=_MCP_REQUEST_TIMEOUT,
+        )
+        result = response.get("result", {})
+        content = result.get("content", [])
+        # 提取文本内容
+        texts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                texts.append(item.get("text", ""))
+            elif isinstance(item, str):
+                texts.append(item)
+        if texts:
+            return "\n".join(texts)
+        return json.dumps(result, ensure_ascii=False)
+
+    async def shutdown(self) -> None:
+        """关闭所有 MCP server 子进程。"""
+        for name, srv in list(self._servers.items()):
+            process = srv["process"]
+            logger.info("Shutting down MCP server '%s'", name)
+            try:
+                process.terminate()
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+            except Exception:
+                pass
+        self._servers.clear()
+        MCPServerManager._instance = None
+
+    # -- JSON-RPC 2.0 helpers --
+
+    @staticmethod
+    async def _send_request(
+        process: asyncio.subprocess.Process,
+        method: str,
+        params: dict,
+        timeout: float = 30.0,
+    ) -> dict:
+        """发送 JSON-RPC 请求并等待响应。"""
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": method,
+            "params": params,
+        }
+        request_bytes = (json.dumps(request) + "\n").encode("utf-8")
+        process.stdin.write(request_bytes)
+        await process.stdin.drain()
+
+        try:
+            line = await asyncio.wait_for(
+                process.stdout.readline(), timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            raise TimeoutError(
+                f"MCP request '{method}' timed out after {timeout}s"
+            )
+
+        if not line:
+            raise ConnectionError(
+                f"MCP server closed stdout during '{method}'"
+            )
+        try:
+            return json.loads(line.decode("utf-8"))
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Invalid JSON-RPC response for '{method}': {e}"
+            )
+
+    @staticmethod
+    def _send_notification(
+        process: asyncio.subprocess.Process,
+        method: str,
+        params: dict,
+    ) -> None:
+        """发送 JSON-RPC 通知（无 id，不需响应）。"""
+        notification = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        }
+        request_bytes = (json.dumps(notification) + "\n").encode("utf-8")
+        process.stdin.write(request_bytes)

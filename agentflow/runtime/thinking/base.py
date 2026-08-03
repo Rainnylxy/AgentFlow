@@ -131,17 +131,21 @@ class ThinkingStrategy(ABC):
             if trace:
                 turn = AgentTurn(
                     turn=i + 1,
+                    start_time=time.time(),
                     messages_snapshot=copy.deepcopy(messages),
                     tools_snapshot=copy.deepcopy(tools_param) if tools_param else [],
                 )
                 trace.turns.append(turn)
                 trace.total_turns = len(trace.turns)
 
+            t_llm_start = time.monotonic()
             response = await context.llm_client.chat(messages, tools=tools_param, max_tokens=context.max_output_tokens)
+            t_llm_dur = int((time.monotonic() - t_llm_start) * 1000)
 
             if response.tool_calls:
                 # 回填本轮思考内容和 LLM 响应元信息
                 if trace:
+                    trace.turns[-1].llm_call_duration_ms = t_llm_dur
                     trace.turns[-1].thinking = response.content or f"Decided to call: {[tc['function']['name'] for tc in response.tool_calls]}"
                     trace.turns[-1].reasoning = response.reasoning_content
                     trace.turns[-1].finish_reason = response.finish_reason

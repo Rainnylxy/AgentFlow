@@ -151,14 +151,21 @@ class DAGExecutor:
 
             await hooks.on_group_end(group, hctx)
 
-        # 导出消息流
+        # 导出消息流，关联到发送 Agent 的 turn
         for msg in bus.all_messages():
+            turn_num = 0
+            sender_trace = trace.node_traces.get(msg.from_agent)
+            if sender_trace:
+                for t in sender_trace.turns:
+                    if msg.timestamp >= t.start_time:
+                        turn_num = t.turn
             trace.message_flow.append(MessageRecord(
                 timestamp=msg.timestamp,
                 from_agent=msg.from_agent,
                 to_agent=msg.to_agent,
                 intent=msg.intent,
                 payload=msg.payload,
+                turn_number=turn_num,
             ))
 
         # 填 Trace 数据
