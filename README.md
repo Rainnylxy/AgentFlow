@@ -20,15 +20,15 @@
 
 ## 核心特性
 
-| 模块                          | 功能                                                                                        |
-| ----------------------------- | ------------------------------------------------------------------------------------------- |
-| **Workflow DSL**              | Python 声明式定义多 Agent 拓扑（DAG），支持顺序、条件分支、并行、循环、子图嵌套             |
-| **Orchestration Engine**     | 异步 DAG 执行器，拓扑排序 + 并行分组调度，内置熔断器、指数退避重试、超时控制、降级逻辑     |
-| **Agent Runtime**             | 支持 ReAct / Plan-Execute 模式，统一 Tool Registry（MCP + REST + 本地函数），Memory Manager |
-| **Trace Store**               | OpenTelemetry 原生集成，完整执行轨迹持久化，支持 Trace 回放与 Diff 对比                     |
-| **Eval Engine**               | 4 种 Evaluator（Exact Match / Semantic / LLM-as-Judge / Trajectory Scoring），一键跑分      |
-| **Benchmark Suite**           | 标准化 Agent 评测集（Tool-Use / Multi-Hop QA / Long-Context）                               |
-| **CLI & Dashboard**           | `agentflow new / dev / eval / trace` + React Dashboard 可视化                               |
+| 模块                     | 功能                                                                                        |
+| ------------------------ | ------------------------------------------------------------------------------------------- |
+| **Workflow DSL**         | Python 声明式定义多 Agent 拓扑（DAG），支持顺序、条件分支、并行、循环、子图嵌套             |
+| **Orchestration Engine** | 异步 DAG 执行器，拓扑排序 + 并行分组调度，内置熔断器、指数退避重试、超时控制、降级逻辑      |
+| **Agent Runtime**        | 支持 ReAct / Plan-Execute 模式，统一 Tool Registry（MCP + REST + 本地函数），Memory Manager |
+| **Trace Store**          | OpenTelemetry 原生集成，完整执行轨迹持久化，支持 Trace 回放与 Diff 对比                     |
+| **Eval Engine**          | 4 种 Evaluator（Exact Match / Semantic / LLM-as-Judge / Trajectory Scoring），一键跑分      |
+| **Benchmark Suite**      | 标准化 Agent 评测集（Tool-Use / Multi-Hop QA / Long-Context）                               |
+| **CLI & Dashboard**      | `agentflow new / dev / eval / trace` + React Dashboard 可视化                               |
 
 ## 技术架构
 
@@ -152,13 +152,13 @@ agentflow trace
 
 ## 项目路线图
 
-| 周次           | 里程碑                                                      |
-| -------------- | ----------------------------------------------------------- |
-| W1 (6/1-6/7)   | 项目骨架 + Workflow DSL 设计                                 |
-| W2 (6/8-6/14)  | DAG Executor + 熔断/重试/超时 + Agent Runtime               |
-| W3 (6/15-6/21) | Tool Registry + Memory Manager + Eval Engine                |
-| W4 (6/22-6/28) | Trace Store + Benchmark Suite + CLI + 集成测试              |
-| W5 (6/29-7/5)  | Dashboard + 文档 + Demo 视频 + 博客                         |
+| 周次           | 里程碑                                         |
+| -------------- | ---------------------------------------------- |
+| W1 (6/1-6/7)   | 项目骨架 + Workflow DSL 设计                   |
+| W2 (6/8-6/14)  | DAG Executor + 熔断/重试/超时 + Agent Runtime  |
+| W3 (6/15-6/21) | Tool Registry + Memory Manager + Eval Engine   |
+| W4 (6/22-6/28) | Trace Store + Benchmark Suite + CLI + 集成测试 |
+| W5 (6/29-7/5)  | Dashboard + 文档 + Demo 视频 + 博客            |
 
 ## 文档
 

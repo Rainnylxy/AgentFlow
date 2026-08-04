@@ -18,7 +18,7 @@ If `IMPLEMENTATION_PLAN.md` and the git log disagree, trust the git log. Git is 
 
 ## Single-feature rule
 
-One feature per session. Sessions that pack multiple features ship them all half-done — we have measured this. The next session takes the next feature. There is no reward for finishing more in one session; there is a real cost to leaving things half-done.
+One feature per session. See `.claude/rules/single-feature-per-session.md` for the full rule and accident record.
 
 ## Clean-state contract (end of every session)
 
@@ -30,10 +30,10 @@ One feature per session. Sessions that pack multiple features ship them all half
 
 ## Skills vs rules
 
-- **Skills** (`skills/*/SKILL.md`) — invoked on demand by trigger phrases in their `description`. Read the skill's SKILL.md before acting on a matching task.
-- **Rules** (`.claude/rules/*.md`) — auto-loaded when a file path matches. Silent guardrails, not opt-in.
+- **Skills** — invoked on demand by trigger phrases. Read `SKILL.md` before acting.
+- **Rules** (`.claude/rules/*.md`) — auto-loaded when a file path matches. Each rule = one accident, one constraint. Silent guardrails, not opt-in.
 
-Full skill routing table: `skills/using-loopkit/SKILL.md` (repo layout) or `.claude/skills/using-loopkit/SKILL.md` (installed layout).
+Routing: `skills/using-loopkit/SKILL.md` or `.claude/skills/using-loopkit/SKILL.md`.
 
 ## Slash-command entry points
 
@@ -41,14 +41,14 @@ Full skill routing table: `skills/using-loopkit/SKILL.md` (repo layout) or `.cla
 - `/verify` — adversarial pass against the current diff. Non-zero exit blocks completion claims.
 - `/loop` — describe or run the Plan → Act → Verify cycle.
 
-## Never
+## Never (detail in `.claude/rules/`)
 
-- Weaken or delete a test to make red go green. If a test is wrong, fix the test in its own commit with justification.
-- Mark work done without running `/verify`.
-- Edit a merged migration. Migrations are additive-only.
-- Add a dependency without justifying it in the commit body.
-- Run `npm update`, `pip install -U`, or equivalents unless the feature is literally "upgrade dependencies".
-- Push to `main` from an agent session. Humans push.
+- Weaken/delete a test to make red go green
+- Mark work done without `/verify`
+- Edit a merged migration → `.claude/rules/no-edit-migration.md`
+- Add a dependency without commit-body justification
+- `npm update` / `pip install -U` unless the feature IS "upgrade dependencies"
+- Push to `main` from agent session → `.claude/rules/never-force-push.md`
 
 ## Verify before you commit
 
