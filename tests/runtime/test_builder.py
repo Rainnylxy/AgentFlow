@@ -47,6 +47,7 @@ class TestAgentBuilder:
         agent = (AgentBuilder("tool-agent")
             .with_llm(mock_llm)
             .with_tools(echo)
+            .with_thinking(ThinkingMode.REACT)
             .build_sync())
 
         import asyncio

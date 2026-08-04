@@ -350,7 +350,7 @@ class TestAgentRuntimeEndToEnd:
             .with_tools(self._make_lookup_tool(), self._make_calculator_tool())
             .with_memory(MemoryProfile.deep())
             .with_prompt(template)
-            .with_thinking(ThinkingMode.ADAPTIVE)
+            .with_thinking(ThinkingMode.REACT)
             .with_max_iterations(8)
             .build_sync()
         )
