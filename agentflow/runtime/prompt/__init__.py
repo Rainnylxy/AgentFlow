@@ -1,8 +1,9 @@
-"""Prompt Template — 模块化 System Prompt 组装系统。"""
+"""Prompt Template — 模块化 System Prompt 组装系统 + 版本管理。"""
 
 from typing import Dict, List, Optional
 
 from agentflow.runtime.prompt.section import Section, RoleCard, SafetyRules, ToolManual, FormatGuide, TimeContext
+from agentflow.runtime.prompt.version import PromptDiff, PromptRegistry, PromptVersion
 
 
 class PromptTemplate:
