@@ -10,8 +10,6 @@ docs/
 .mcp.json
 .superpowers/
 *.html
-# Go
-engine/agentflow-engine.exe
 *.exe
 
 # IDE

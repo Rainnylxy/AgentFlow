@@ -4,7 +4,6 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
-[![Go](https://img.shields.io/badge/go-1.22+-00ADD8.svg)](https://go.dev/)
 
 **AgentFlow** 是一个开源的生产级多 Agent 编排与评测框架，帮助开发者将 Agent 从原型推向生产，并持续评测质量。
 
@@ -24,7 +23,7 @@
 | 模块                          | 功能                                                                                        |
 | ----------------------------- | ------------------------------------------------------------------------------------------- |
 | **Workflow DSL**              | Python 声明式定义多 Agent 拓扑（DAG），支持顺序、条件分支、并行、循环、子图嵌套             |
-| **Orchestration Engine (Go)** | 高性能 DAG 执行器，内置熔断器、指数退避重试、超时控制、降级逻辑                             |
+| **Orchestration Engine**     | 异步 DAG 执行器，拓扑排序 + 并行分组调度，内置熔断器、指数退避重试、超时控制、降级逻辑     |
 | **Agent Runtime**             | 支持 ReAct / Plan-Execute 模式，统一 Tool Registry（MCP + REST + 本地函数），Memory Manager |
 | **Trace Store**               | OpenTelemetry 原生集成，完整执行轨迹持久化，支持 Trace 回放与 Diff 对比                     |
 | **Eval Engine**               | 4 种 Evaluator（Exact Match / Semantic / LLM-as-Judge / Trajectory Scoring），一键跑分      |
@@ -40,7 +39,7 @@
 └──────────────────┬──────────────────────┘
                    │
 ┌──────────────────▼──────────────────────┐
-│       Orchestration Engine (Go)          │
+│       Orchestration Engine (Python)      │
 │  ┌──────────┐ ┌────────┐ ┌───────────┐  │
 │  │DAG Exec  │ │Circuit │ │ Retry/    │  │
 │  │          │ │Breaker │ │ Fallback  │  │
@@ -49,7 +48,7 @@
 │  │     OpenTelemetry Tracing          │  │
 │  └────────────────────────────────────┘  │
 └──────────────────┬──────────────────────┘
-                   │ gRPC
+                   │
 ┌──────────────────▼──────────────────────┐
 │        Agent Runtime (Python)            │
 │  ┌──────────┐ ┌────────┐ ┌───────────┐  │
@@ -123,21 +122,12 @@ AgentFlow 内置了业界最完整的 Agent 评测体系，覆盖**任务完成�
 | 层级         | 技术                                  |
 | ------------ | ------------------------------------- |
 | Agent 框架   | LangGraph                             |
-| 编排引擎     | Go + gRPC + OpenTelemetry             |
+| 编排引擎     | Python (asyncio) + OpenTelemetry      |
 | Agent 运行时 | Python (FastAPI, LangChain)           |
-| 序列化       | Protocol Buffers                      |
-| Trace 存储   | Pebble (Go)                           |
+| Trace 存储   | JSON 文件存储                         |
 | CLI          | Typer + Rich                          |
 | Dashboard    | React + Recharts                      |
 | 观测性       | OpenTelemetry (Jaeger / Grafana 兼容) |
-
-## 为什么编排引擎用 Go？
-
-1. **高性能** — goroutine 天然适合 DAG 拓扑排序 + 并发执行
-2. **可靠性** — 静态类型 + 编译检查，减少生产环境意外
-3. **部署简单** — 单个二进制分发，不依赖 Python 环境
-
-编排引擎负责"什么时候执行哪个节点、失败了怎么办"；Agent Runtime 负责"怎么跟 LLM 交互、怎么调用工具"。两者通过 gRPC 通信，可独立部署和扩展。
 
 ## 快速开始
 
@@ -164,8 +154,8 @@ agentflow trace
 
 | 周次           | 里程碑                                                      |
 | -------------- | ----------------------------------------------------------- |
-| W1 (6/1-6/7)   | Go 环境搭建 + 项目骨架 + Workflow DSL 设计                  |
-| W2 (6/8-6/14)  | DAG Executor (Go) + 熔断/重试/超时 + Agent Runtime (Python) |
+| W1 (6/1-6/7)   | 项目骨架 + Workflow DSL 设计                                 |
+| W2 (6/8-6/14)  | DAG Executor + 熔断/重试/超时 + Agent Runtime               |
 | W3 (6/15-6/21) | Tool Registry + Memory Manager + Eval Engine                |
 | W4 (6/22-6/28) | Trace Store + Benchmark Suite + CLI + 集成测试              |
 | W5 (6/29-7/5)  | Dashboard + 文档 + Demo 视频 + 博客                         |
