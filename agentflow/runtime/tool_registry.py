@@ -9,7 +9,11 @@ import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agentflow.runtime.security.engine import PolicyEngine
+    from agentflow.runtime.security.policy import CallContext
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +118,15 @@ class ToolResult:
 class ToolRegistry:
     def __init__(self):
         self._tools: dict[str, Tool] = {}
+        self._policy_engine: Optional[PolicyEngine] = None
+
+    def attach_policy_engine(self, engine: PolicyEngine) -> None:
+        """Attach a PolicyEngine for pre-execution checks and audit logging.
+
+        Once attached, every ``execute()`` call that provides a *context*
+        will be checked against registered SecurityPolicies.
+        """
+        self._policy_engine = engine
 
     def register(self, tool: Tool) -> None:
         if tool.name in self._tools:
@@ -129,26 +142,58 @@ class ToolRegistry:
     def list_tools(self) -> list[Tool]:
         return list(self._tools.values())
 
-    async def execute(self, name: str, inputs: dict) -> ToolResult:
+    async def execute(
+        self, name: str, inputs: dict,
+        context: Optional[CallContext] = None,
+    ) -> ToolResult:
         tool = self._tools.get(name)
         if tool is None:
             return ToolResult(success=False, error=f"Tool '{name}' not found")
+
+        # --- Security check (pre-execution) ---
+        if self._policy_engine is not None and context is not None:
+            policy_result = self._policy_engine.check(name, context, inputs)
+            if policy_result.verdict == "deny":
+                return ToolResult(success=False, error=f"Security: {policy_result.reason}")
+            if policy_result.verdict == "pending_approval":
+                return ToolResult(
+                    success=False,
+                    error=f"Security: approval required (id={policy_result.approval_id})",
+                )
+            if policy_result.sanitized_params is not None:
+                inputs = policy_result.sanitized_params
+
         try:
             # Pydantic 校验
             validated_inputs = tool.validate_params(inputs)
 
+            tool_result: ToolResult
             if tool.tool_type == ToolType.LOCAL and tool.func:
                 output = tool.func(**validated_inputs)
-                return ToolResult(success=True, output=str(output))
+                tool_result = ToolResult(success=True, output=str(output))
             elif tool.tool_type == ToolType.REST and tool.endpoint:
                 output = await self._execute_rest(tool, validated_inputs)
-                return ToolResult(success=True, output=output)
+                tool_result = ToolResult(success=True, output=output)
             elif tool.tool_type == ToolType.MCP:
                 output = await self._execute_mcp(tool, validated_inputs)
-                return ToolResult(success=True, output=output)
-            return ToolResult(success=False, error=f"Unsupported tool type: {tool.tool_type}")
+                tool_result = ToolResult(success=True, output=output)
+            else:
+                tool_result = ToolResult(
+                    success=False, error=f"Unsupported tool type: {tool.tool_type}"
+                )
         except Exception as e:
-            return ToolResult(success=False, error=str(e))
+            tool_result = ToolResult(success=False, error=str(e))
+
+        # --- Audit (post-execution) ---
+        if self._policy_engine is not None and context is not None:
+            self._policy_engine.audit(
+                name, context, inputs,
+                success=tool_result.success,
+                output=tool_result.output or "",
+                error=tool_result.error,
+            )
+
+        return tool_result
 
     async def _execute_rest(self, tool: Tool, inputs: dict) -> str:
         """预留 REST 调用实现。"""
