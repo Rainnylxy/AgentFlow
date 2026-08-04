@@ -389,9 +389,15 @@ class DAGExecutor:
 
         elif node.kind == NodeKind.TOOL:
             if tool_fn is None:
-                raise RuntimeError(f"TOOL node '{node.id}': tool_fn not provided")
+                raise AgentFlowWorkflowError(
+                    f"TOOL node '{node.id}': tool_fn not provided",
+                    node_id=node.id,
+                )
             if node.tool is None:
-                raise RuntimeError(f"TOOL node '{node.id}': tool config missing")
+                raise AgentFlowWorkflowError(
+                    f"TOOL node '{node.id}': tool config missing",
+                    node_id=node.id,
+                )
             await hooks.on_tool_call(node.tool.name, node.tool.inputs, hctx)
             result = await tool_fn(node.tool.name, node.tool.inputs)
             await hooks.on_tool_result(node.tool.name, result, hctx)
@@ -424,13 +430,17 @@ class DAGExecutor:
         """
         sub_name = node.subgraph
         if not sub_name:
-            raise RuntimeError(f"SUBGRAPH node '{node.id}': subgraph name not set")
+            raise AgentFlowWorkflowError(
+                f"SUBGRAPH node '{node.id}': subgraph name not set",
+                node_id=node.id,
+            )
 
         child_wf = self._workflows.get(sub_name)
         if child_wf is None:
-            raise RuntimeError(
+            raise AgentFlowWorkflowError(
                 f"SUBGRAPH node '{node.id}': unknown workflow '{sub_name}'. "
-                f"Available: {list(self._workflows.keys())}"
+                f"Available: {list(self._workflows.keys())}",
+                node_id=node.id,
             )
 
         # 从 ctx 提取消息总线，父子共享
@@ -481,7 +491,10 @@ class DAGExecutor:
         """
         human_conf = node.human
         if human_conf is None:
-            raise RuntimeError(f"HUMAN node '{node.id}': human config missing")
+            raise AgentFlowWorkflowError(
+                f"HUMAN node '{node.id}': human config missing",
+                node_id=node.id,
+            )
 
         prompt = human_conf.prompt or f"Human approval required for '{node.id}'"
         timeout = human_conf.timeout_sec
