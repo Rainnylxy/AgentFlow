@@ -32,8 +32,6 @@ venv/
 novel2comic/novels/
 projects/
 
-context/interview-guide.md
-resume-explanations.md
-*.json
 context/
+*.json
 *.md

@@ -30,6 +30,13 @@ class Session:
     # Arbitrary user data (e.g., conversation history references)
     data: dict = field(default_factory=dict)
 
+    # Valid transitions for the state machine
+    _VALID_TRANSITIONS: dict[SessionStatus, set[SessionStatus]] = field(default_factory=lambda: {
+        SessionStatus.ACTIVE: {SessionStatus.IDLE, SessionStatus.CLOSED},
+        SessionStatus.IDLE: {SessionStatus.ACTIVE, SessionStatus.CLOSED},
+        SessionStatus.CLOSED: set(),
+    })
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,
@@ -56,11 +63,22 @@ class Session:
         return self.status != SessionStatus.CLOSED
 
     def close(self) -> None:
-        self.status = SessionStatus.CLOSED
+        self._transition_to(SessionStatus.CLOSED)
         self.closed_at = time.time()
 
     def mark_idle(self) -> None:
-        self.status = SessionStatus.IDLE
+        self._transition_to(SessionStatus.IDLE)
+
+    def mark_active(self) -> None:
+        self._transition_to(SessionStatus.ACTIVE)
+
+    def _transition_to(self, target: SessionStatus) -> None:
+        allowed = self._VALID_TRANSITIONS.get(self.status, set())
+        if target not in allowed:
+            raise ValueError(
+                f"Invalid session transition: {self.status.value} → {target.value}"
+            )
+        self.status = target
 
 
 class SessionManager:

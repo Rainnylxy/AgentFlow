@@ -7,10 +7,13 @@ Anthropic/OpenAI recommended practices.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 # XML tags used for input delimitation — these appear in the system prompt
 # instructing the LLM to treat everything between them as untrusted user input.
@@ -161,7 +164,7 @@ class InputGuard:
                         violations=[f"[{rule.name}] {rule.message}"],
                     )
             except Exception:
-                # A broken rule should never block legitimate input.
+                logger.warning("Guard rule '%s' failed — skipping", rule.name, exc_info=True)
                 continue
 
         # Apply delimiter wrapping on ALLOW

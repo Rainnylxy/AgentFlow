@@ -105,13 +105,18 @@ class PromptRegistry:
         metadata: dict | None = None,
     ) -> PromptVersion:
         """Persist a new version. If the content is identical to an existing
-        version, returns the existing one (no duplicate storage).
+        version, returns the existing one (no duplicate storage). If new
+        metadata is supplied, it is merged into the existing version.
         """
         version_id = _content_hash(template)
 
         # Check if this version already exists
         existing = self.get(name, version_id)
         if existing is not None:
+            if metadata:
+                existing.metadata.update(metadata)
+                self._write_version_file(existing)
+            self._set_current(name, version_id)
             return existing
 
         pv = PromptVersion(
@@ -121,20 +126,21 @@ class PromptRegistry:
             metadata=metadata or {},
         )
 
-        dir_path = _prompt_dir(name, self._base)
-        dir_path.mkdir(parents=True, exist_ok=True)
-
-        # Write version file
-        version_path = dir_path / f"{version_id}.json"
-        version_path.write_text(
-            json.dumps(pv.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        self._write_version_file(pv)
 
         # Update current pointer
         self._set_current(name, version_id)
 
         return pv
+
+    def _write_version_file(self, pv: PromptVersion) -> None:
+        dir_path = _prompt_dir(pv.name, self._base)
+        dir_path.mkdir(parents=True, exist_ok=True)
+        version_path = dir_path / f"{pv.version}.json"
+        version_path.write_text(
+            json.dumps(pv.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     def get(self, name: str, version: str | None = None) -> PromptVersion | None:
         """Retrieve a prompt version. If *version* is None, returns the latest."""
