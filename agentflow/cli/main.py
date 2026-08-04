@@ -101,6 +101,19 @@ llm:
   base_url: https://api.openai.com/v1
   # api_key 从环境变量 AGENTFLOW_API_KEY 读取
 
+# 运行时配置
+runtime:
+  max_iterations: 10
+  thinking_mode: adaptive
+  memory_profile: standard
+
+# 工具注册
+tools: []
+  # - name: search
+  #   kind: local
+  #   path: "my_project.tools:search"
+  #   description: "搜索知识库"
+
 # Skill 目录
 skills_dir: skills/
 
@@ -157,7 +170,7 @@ def new(
 @app.command()
 def dev(
     workflow_path: str = typer.Argument("workflow.yaml", help="Workflow YAML 文件路径"),
-    llm_model: str = typer.Option("gpt-4o", help="使用的 LLM 模型"),
+    llm_model: str = typer.Option("", help="使用的 LLM 模型（覆盖 agentflow.yaml 配置）"),
     dry_run: bool = typer.Option(False, help="干跑模式——不调 LLM，只看 DAG 执行"),
 ):
     """启动开发服务器，运行 Workflow 并查看 Trace。"""
@@ -165,6 +178,17 @@ def dev(
     from agentflow.dsl.types import NodeKind
     from agentflow.runtime.orchestrator import DAGExecutor
     from agentflow.runtime.thinking import ThinkingMode
+    from agentflow.runtime.config import ProjectConfig
+
+    # 加载项目配置 (agentflow.yaml)
+    wf_path = Path(workflow_path)
+    config_path = wf_path.parent / "agentflow.yaml"
+    if config_path.exists():
+        config = ProjectConfig.load(config_path)
+        console.print(f"[dim]已加载项目配置: {config_path}[/dim]")
+    else:
+        config = ProjectConfig._default(wf_path.parent)
+        console.print("[dim]未找到 agentflow.yaml，使用默认配置[/dim]")
 
     # 加载 Workflow
     console.print(f"[blue]>> 加载 Workflow: {workflow_path}[/blue]")
@@ -184,10 +208,13 @@ def dev(
     console.print()
     console.print(Panel(to_mermaid(wf), title="DAG 可视化", border_style="dim"))
 
+    # 确定 LLM 配置
+    model = llm_model or config.llm.model
+    api_key = config.llm.resolved_api_key
+    base_url = config.llm.resolved_base_url
+
     # 构建 node_id → Agent 映射
     agents: dict[str, object] = {}
-    api_key = os.getenv("AGENTFLOW_API_KEY") or os.getenv("OPENAI_API_KEY", "")
-    base_url = os.getenv("AGENTFLOW_BASE_URL") or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
     if dry_run or not api_key:
         if not api_key:
@@ -201,13 +228,32 @@ def dev(
         from agentflow.runtime.llm_client import OpenAIClient
         from agentflow.runtime.builder import AgentBuilder
         from agentflow.runtime.memory.manager import MemoryProfile
-        from agentflow.runtime.tool_registry import ToolRegistry
+        from agentflow.runtime.toolkit import tool, ToolKit
 
-        # 全局 ToolRegistry：收集所有节点引用的工具
-        tool_registry = ToolRegistry()
-        _default_tools = {}  # 示例工具池，实际项目从 agentflow.yaml 或插件加载
+        toolkit = ToolKit()
+        _loaded_tools: dict[str, object] = {}
 
-        llm = OpenAIClient(api_key=api_key, model=llm_model, base_url=base_url)
+        # 从 agentflow.yaml 加载工具
+        for ts in config.tools.tools:
+            try:
+                if ts.kind == "local" and ts.path:
+                    module_path, func_name = ts.path.rsplit(":", 1)
+                    import importlib
+                    mod = importlib.import_module(module_path)
+                    func = getattr(mod, func_name)
+                    t = tool(name=ts.name, description=ts.description)(func)
+                    toolkit.add(t)
+                    _loaded_tools[ts.name] = t
+                    console.print(f"  [dim]工具 '{ts.name}' 已加载 ({ts.path})[/dim]")
+                else:
+                    console.print(f"  [yellow]!! 工具 '{ts.name}' (kind={ts.kind}) 暂不支持[/yellow]")
+            except Exception as e:
+                console.print(f"  [yellow]!! 工具 '{ts.name}' 加载失败: {e}[/yellow]")
+
+        llm = OpenAIClient(
+            api_key=api_key, model=model, base_url=base_url,
+            max_retries=config.llm.max_retries, timeout=config.llm.timeout,
+        )
 
         _thinking_map = {
             "react": ThinkingMode.REACT,
@@ -225,41 +271,43 @@ def dev(
             if node.kind != NodeKind.AGENT:
                 continue
             cfg = node.agent
-            builder = AgentBuilder(node.id).with_llm(llm).with_max_iterations(10)
+            builder = AgentBuilder(node.id).with_llm(llm).with_max_iterations(
+                config.runtime.max_iterations
+            )
 
-            # prompt
             if cfg and cfg.prompt:
                 builder.with_prompt(cfg.prompt)
 
-            # thinking mode
             if cfg and cfg.thinking:
                 mode = _thinking_map.get(cfg.thinking, ThinkingMode.ADAPTIVE)
                 builder.with_thinking(mode)
 
-            # memory
             if cfg and cfg.memory:
                 profile = _memory_map.get(cfg.memory, MemoryProfile.standard())
                 builder.with_memory(profile)
 
-            # tools: 从 tool_registry 查找并注册
             if cfg and cfg.tools:
                 for tool_name in cfg.tools:
-                    if tool_name in _default_tools:
-                        builder.with_tools(_default_tools[tool_name])
+                    t = _loaded_tools.get(tool_name)
+                    if t:
+                        builder.with_tools(t)
                     else:
-                        console.print(f"  [yellow]!! 工具 '{tool_name}' 未注册，跳过[/yellow]")
+                        console.print(f"  [yellow]!! 工具 '{tool_name}' 未在 agentflow.yaml 中找到[/yellow]")
+
+            for skill_name in config.discover_skills():
+                builder.with_skill(skill_name)
 
             agent = asyncio.run(builder.build())
             agents[node.id] = agent
+            thinking_str = cfg.thinking if cfg else config.runtime.thinking_mode
+            memory_str = cfg.memory if cfg else config.runtime.memory_profile
             console.print(f"  [dim]Agent '{node.id}' 已构建 "
-                          f"(thinking={cfg.thinking if cfg else 'adaptive'}, "
-                          f"memory={cfg.memory if cfg else 'standard'})[/dim]")
+                          f"(thinking={thinking_str}, memory={memory_str})[/dim]")
 
         async def agent_fn(node_id: str, ctx: dict, _stream=None) -> str:
             agent = agents.get(node_id)
             if agent is None:
                 return f"[no-agent] node '{node_id}' not registered as AGENT"
-            # 构建 user_input：优先取 incoming_messages，否则用 previous_outputs
             user_input = ctx.get("user_input", "")
             if not user_input:
                 prev = ctx.get("previous_outputs", {})
@@ -322,7 +370,6 @@ def eval(
     from agentflow.eval.exact_match import ExactMatchEvaluator
     from agentflow.eval.semantic import SemanticEvaluator
 
-    # 加载 Workflow
     try:
         wf = from_yaml(workflow_path)
     except FileNotFoundError:
@@ -331,7 +378,6 @@ def eval(
 
     console.print(f"[yellow]== 运行评测: '{suite_name}' → '{wf.name}'[/yellow]")
 
-    # 构建评测套件
     evaluator = ExactMatchEvaluator()
     cases = [
         EvalCase("c1", "你好", "你好", evaluator),
@@ -343,19 +389,15 @@ def eval(
     executor = DAGExecutor()
 
     async def run_workflow(user_input: str) -> str:
-        """包装 Workflow 执行为 EvalSuite 需要的 agent_fn。"""
-        # 把 user_input 注入到第一个节点的输入
         async def agent_fn(node_id: str, ctx: dict) -> str:
             return f"[mock] response to: {user_input} from {node_id}"
 
         results, _ = await executor.execute(wf, agent_fn=agent_fn)
-        # 返回最终节点的输出
         last_nid = wf.nodes[-1].id
         return results[last_nid].output if last_nid in results else "(no output)"
 
     report = asyncio.run(suite.run(run_workflow))
 
-    # 输出报告
     table = Table(title=f"Eval 报告: {report.name}")
     table.add_column("Case", style="cyan")
     table.add_column("通过", style="magenta")
@@ -370,7 +412,6 @@ def eval(
     console.print(f"\n通过率: [bold]{report.pass_rate:.0%}[/bold] "
                   f"({report.passed}/{report.total})")
 
-    # 诊断低分 case
     low = suite.diagnose(report, min_score=0.5)
     if low:
         console.print()
